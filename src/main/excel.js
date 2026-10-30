@@ -2,7 +2,7 @@
 
 const ExcelJS = require("exceljs");
 const { VERDICT_TEXT } = require("./verdict");
-const { displayHost } = require("./domains");
+const { displayHost, displayUrl } = require("./domains");
 
 const FILL = {
   people: "FFFDE2C2",
@@ -63,7 +63,7 @@ async function writeExcel(filePath, hosts, results) {
       [r.unsure, "Проверить глазами"],
     ]) {
       for (const img of list) {
-        const row = images.addRow({ host: displayHost(host), kind, page: img.page, url: img.url });
+        const row = images.addRow({ host: displayHost(host), kind, page: displayUrl(img.page), url: img.url });
         row.getCell("url").value = { text: img.url, hyperlink: img.url };
         row.getCell("url").font = { color: { argb: "FF1A56DB" }, underline: true };
       }

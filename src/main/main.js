@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme } = require("electron");
 const sharp = require("sharp");
 const { scanSites } = require("./scanner");
-const { parseDomains, displayHost } = require("./domains");
+const { parseDomains, displayHost, displayUrl } = require("./domains");
 const { checkKey, providerList, FatalKeyError } = require("./providers");
 const { writeExcel } = require("./excel");
 const { loadSettings, saveSettings, credsFor, loadState, saveState, findImage } = require("./store");
@@ -143,6 +143,8 @@ ipcMain.handle("settings:draw-model", (_e, model) => {
     redrawRules: s.redrawRules,
   });
 });
+
+ipcMain.handle("url:display", (_e, urls) => urls.map(displayUrl));
 
 ipcMain.handle("domains:parse", (_e, text) => parseDomains(text).map((host) => ({ host, label: displayHost(host) })));
 
@@ -369,8 +371,21 @@ app.setAboutPanelOptions({
   authors: ["Андрей Цибин"],
 });
 
-app.whenReady().then(() => {
+const selftestArg = process.argv.find((a) => a.startsWith("--selftest"));
+
+app.whenReady().then(async () => {
+  if (selftestArg) {
+    // Packaged-app check for CI: prints every check, exit code 1 on any failure.
+    const checks = await require("./selftest").run();
+    for (const c of checks) console.log(`${c.ok ? "PASS" : "FAIL"}  ${c.name}  ${c.detail}`);
+    const out = selftestArg.split("=")[1];
+    if (out) fs.writeFileSync(out, JSON.stringify(checks, null, 2));
+    app.exit(checks.every((c) => c.ok) ? 0 : 1);
+    return;
+  }
   createWindow();
   checkForUpdate(app.getVersion()).then((u) => u && send("update:available", u));
 });
-app.on("window-all-closed", () => app.quit());
+app.on("window-all-closed", () => {
+  if (!selftestArg) app.quit();
+});

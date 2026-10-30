@@ -1,4 +1,6 @@
-# Tag vX.Y.Z → installers for macOS (arm64 + x64 .dmg) and Windows (.exe) attached to a GitHub Release.
+# Tag vX.Y.Z → installers for macOS (arm64 + x64 .dmg) and Windows (.exe).
+# Every packaged app runs its own --selftest on the runner; the GitHub Release
+# is published only when all of them pass.
 name: release
 
 on:
@@ -32,6 +34,44 @@ jobs:
       - if: runner.os == 'macOS'
         run: npm install --no-save --os=darwin --cpu=x64 sharp
       - run: npm run ${{ matrix.script }}
+
+      - name: Self-test (macOS arm64 and x64)
+        if: runner.os == 'macOS'
+        run: |
+          set -e
+          for app in "dist/mac-arm64/LPG Photo Scan.app" "dist/mac/LPG Photo Scan.app"; do
+            codesign --verify --deep --strict "$app"
+            exe="$app/Contents/MacOS/LPG Photo Scan"
+            if [ "$app" = "dist/mac/LPG Photo Scan.app" ]; then
+              (softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true)
+              arch -x86_64 "$exe" --selftest=selftest.json
+            else
+              "$exe" --selftest=selftest.json
+            fi
+            cat selftest.json
+          done
+
+      - name: Self-test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\win-unpacked\LPG Photo Scan.exe" -ArgumentList "--selftest=selftest.json" -Wait -PassThru
+          Get-Content selftest.json
+          if ($p.ExitCode -ne 0) { throw "self-test failed: exit $($p.ExitCode)" }
+
+      - name: Install and run the real installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist\*.exe | Select-Object -First 1
+          $i = Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait -PassThru
+          if ($i.ExitCode -ne 0) { throw "installer exit $($i.ExitCode)" }
+          $exe = Join-Path $env:LOCALAPPDATA "Programs\lpg-photo-scan\LPG Photo Scan.exe"
+          if (-not (Test-Path $exe)) { Get-ChildItem (Join-Path $env:LOCALAPPDATA "Programs") -Recurse -Filter *.exe | Select-Object FullName; throw "installed app not found" }
+          $p = Start-Process -FilePath $exe -ArgumentList "--selftest=installed.json" -Wait -PassThru
+          Get-Content installed.json
+          if ($p.ExitCode -ne 0) { throw "installed app self-test failed: exit $($p.ExitCode)" }
+
       - uses: actions/upload-artifact@v4
         with:
           name: installers-${{ runner.os }}
@@ -48,6 +88,12 @@ jobs:
         with:
           path: out
           merge-multiple: true
+      - name: Exactly the three installers
+        run: |
+          ls -la out
+          test -f out/lpg-photo-scan-mac-arm64.dmg
+          test -f out/lpg-photo-scan-mac-x64.dmg
+          test -f out/lpg-photo-scan-win-x64.exe
       - uses: softprops/action-gh-release@v2
         with:
           files: out/*

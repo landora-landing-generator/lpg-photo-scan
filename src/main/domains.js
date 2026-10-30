@@ -52,4 +52,20 @@ function sameSite(url, host) {
 /** "xn--e1afmkfd.xn--p1ai" → "пример.рф" for people; the punycode form stays the key. */
 const displayHost = (host) => domainToUnicode(host) || host;
 
-module.exports = { parseDomains, normalizeHost, sameSite, displayHost };
+/** A full URL for people: Cyrillic host and path instead of "xn--…" and "%D0%…". */
+function displayUrl(url) {
+  try {
+    const u = new URL(url);
+    let path = u.pathname + u.search;
+    try {
+      path = decodeURI(path);
+    } catch {
+      /* keep encoded */
+    }
+    return `${u.protocol}//${displayHost(u.host)}${path === "/" ? "/" : path}`;
+  } catch {
+    return url;
+  }
+}
+
+module.exports = { parseDomains, normalizeHost, sameSite, displayHost, displayUrl };

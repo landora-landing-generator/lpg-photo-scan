@@ -10,6 +10,7 @@ const { drawImage } = require("./draw");
 const { toWebJpeg } = require("./web-image");
 const { credsFor, redrawRules, loadState, findImage, updateImage, redrawDir } = require("./store");
 const { baseName } = require("./redraw-names");
+const { displayUrl } = require("./domains");
 
 const VISION_SIDE = 768;
 
@@ -108,7 +109,7 @@ function exportSite(host, folder) {
     used.add(name);
     const file = `${name}.jpg`;
     fs.copyFileSync(path.join(redrawDir(host), img.redraw.file), path.join(dir, file));
-    rows.push([img.page, img.url, file, img.redraw.width, img.redraw.height]);
+    rows.push([displayUrl(img.page), img.url, file, img.redraw.width, img.redraw.height]);
   }
   const csv = rows.map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(";")).join("\r\n");
   // BOM: Excel on Windows opens a UTF-8 CSV without it as mojibake.

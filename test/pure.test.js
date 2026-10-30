@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseDomains, normalizeHost, sameSite, displayHost } from "../src/main/domains.js";
+import { parseDomains, normalizeHost, sameSite, displayHost, displayUrl } from "../src/main/domains.js";
 import { imageKey, cssUrls } from "../src/main/image-urls.js";
 import { verdictOf } from "../src/main/verdict.js";
 import { parseKind, cleanPrompt } from "../src/main/classify.js";
@@ -19,6 +19,7 @@ describe("domains", () => {
     expect(normalizeHost("пример.рф")).toBe("xn--e1afmkfd.xn--p1ai");
     expect(normalizeHost("https://www.Пример.РФ/страница")).toBe("xn--e1afmkfd.xn--p1ai");
     expect(displayHost("xn--e1afmkfd.xn--p1ai")).toBe("пример.рф");
+    expect(displayUrl("https://xn--e1afmkfd.xn--p1ai/%D1%83%D1%81%D0%BB%D1%83%D0%B3%D0%B8")).toBe("https://пример.рф/услуги");
   });
   it("treats www and bare host as one site", () => {
     expect(sameSite("https://www.site.ru/a", "site.ru")).toBe(true);

@@ -47,6 +47,16 @@ function plural(n, one, few, many) {
 }
 
 const kb = (bytes) => (bytes >= 1024 * 1024 ? `${(bytes / 1048576).toFixed(1)} МБ` : `${Math.max(1, Math.round(bytes / 1024))} КБ`);
+/** Display forms of page URLs (Cyrillic host and path), filled from the main process. */
+const shownUrl = new Map();
+async function learnUrls(urls) {
+  const todo = [...new Set(urls)].filter((u) => !shownUrl.has(u));
+  if (!todo.length) return;
+  const shown = await ipc.displayUrls(todo);
+  todo.forEach((u, i) => shownUrl.set(u, shown[i]));
+}
+const prettyUrl = (u) => shownUrl.get(u) ?? u;
+
 const labelOf = (host) => state.hosts.find((h) => h.host === host)?.label ?? host;
 const verdictOf = (host) => state.results[host]?.verdict ?? "none";
 const imagesOf = (r) => [...(r?.people ?? []), ...(r?.unsure ?? [])];
@@ -377,7 +387,7 @@ function thumbGrid(host, r) {
     if (!list.length) continue;
     grid.append(el("div", { class: "label" }, `${label} (${list.length})`));
     for (const img of list) {
-      let pagePath = img.page;
+      let pagePath = prettyUrl(img.page);
       try {
         pagePath = decodeURI(new URL(img.page).pathname);
       } catch {
@@ -468,7 +478,8 @@ async function showViewerImage() {
   $("viewer-pos").textContent = `${pos + 1} из ${list.length}`;
   $("viewer-prev").disabled = pos <= 0;
   $("viewer-next").disabled = pos >= list.length - 1;
-  $("viewer-page").textContent = img.page;
+  await learnUrls([img.page]);
+  $("viewer-page").textContent = prettyUrl(img.page);
   $("viewer-page").onclick = () => ipc.openExternal(img.page);
   $("viewer-old-meta").textContent = img.width ? `· ${img.width}×${img.height}, ${kb(img.bytes)}` : "";
   $("viewer-prompt").value = img.redraw?.prompt ?? "";
@@ -525,6 +536,7 @@ $("viewer").addEventListener("click", (e) => {
 
 function setViewerBusy(on) {
   viewer.busy = on;
+  $("viewer-new").parentElement.classList.toggle("loading", on);
   $("viewer-redraw").textContent = on ? "Отменить" : currentImage()?.redraw ? "Перерисовать ещё раз" : "Перерисовать";
   $("viewer-redraw").classList.toggle("primary", !on);
   $("viewer-redraw").classList.toggle("danger", on);
@@ -615,6 +627,12 @@ $("studio-clear").addEventListener("click", () => {
 
 function setStudioBusy(on) {
   studio.busy = on;
+  // The result frame shows the wave while drawing, and keeps the old result hidden meanwhile.
+  $("studio-result").hidden = !on && !studio.file;
+  $("studio-out").parentElement.classList.toggle("loading", on);
+  $("studio-wait").hidden = !on;
+  if (on) $("studio-out").removeAttribute("src");
+  $("studio-save").disabled = on;
   $("studio-go").textContent = on ? "Отменить" : studio.file ? "Нарисовать ещё" : "Нарисовать";
   $("studio-go").classList.toggle("primary", !on);
   $("studio-go").classList.toggle("danger", on);
@@ -631,8 +649,10 @@ $("studio-go").addEventListener("click", async () => {
   setStudioBusy(false);
   if (res.error) {
     setStatus("studio-status", res.error, res.cancelled ? "" : "bad");
+    if (studio.lastPreview) $("studio-out").src = studio.lastPreview;
     return;
   }
+  studio.lastPreview = res.preview;
   studio.file = res.file;
   $("studio-out").src = res.preview;
   $("studio-meta").textContent = `${res.width}×${res.height}, ${kb(res.bytes)}, JPEG для сайта`;

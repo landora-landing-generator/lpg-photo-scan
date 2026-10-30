@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("api", {
   getState: () => ipcRenderer.invoke("state:get"),
   saveSettings: (settings) => ipcRenderer.invoke("settings:save", settings),
   setDrawModel: (model) => ipcRenderer.invoke("settings:draw-model", model),
+  displayUrls: (urls) => ipcRenderer.invoke("url:display", urls),
   parseDomains: (text) => ipcRenderer.invoke("domains:parse", text),
   importDomains: () => ipcRenderer.invoke("domains:import", {}),
   // Dropped File objects carry no path in a sandboxed page; webUtils resolves it here.

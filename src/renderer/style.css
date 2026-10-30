@@ -488,3 +488,46 @@ table.results { width: 100%; border-collapse: collapse; }
 .hint:empty { display: none; }
 
 input.draw-model { width: 260px; font-size: 13px; }
+
+/* ---------- drawing in progress: a soft wave runs across the frame ---------- */
+.frame { position: relative; }
+.frame.loading { background: var(--accent-soft); }
+.frame.loading::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    110deg,
+    transparent 15%,
+    color-mix(in srgb, var(--accent) 18%, transparent) 35%,
+    color-mix(in srgb, var(--card) 70%, transparent) 50%,
+    color-mix(in srgb, var(--accent) 18%, transparent) 65%,
+    transparent 85%
+  );
+  background-size: 250% 100%;
+  animation: frame-wave 1.8s ease-in-out infinite;
+}
+.frame.loading::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  animation: frame-bar 1.4s ease-in-out infinite;
+}
+.frame.loading > span { position: relative; z-index: 1; color: var(--text); font-weight: 500; }
+@keyframes frame-wave {
+  from { background-position: 130% 0; }
+  to { background-position: -130% 0; }
+}
+@keyframes frame-bar {
+  from { background-position: -50% 0; }
+  to { background-position: 150% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .frame.loading::before, .frame.loading::after { animation-duration: 4s; }
+}
