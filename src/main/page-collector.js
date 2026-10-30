@@ -16,7 +16,7 @@ async function collectInPage() {
   }
   await sleep(1200);
 
-  const imageAttr = /\.(?:jpe?g|png|webp|avif|gif|bmp|heic)(?:$|[?#])|tildacdn\./i;
+  const imageAttr = /\.(?:jpe?g|jfif|pjpeg|png|apng|webp|avif|gif|bmp|tiff?|heic|heif|jxl)(?:$|[?#])|tildacdn\./i;
   const found = [];
   const push = (url) => {
     if (url && typeof url === "string" && !url.startsWith("data:")) found.push(url.trim());
@@ -30,6 +30,15 @@ async function collectInPage() {
     if (img.srcset) fromSrcset(img.srcset);
   }
   for (const source of document.querySelectorAll("source[srcset]")) fromSrcset(source.srcset);
+  for (const video of document.querySelectorAll("video[poster]")) push(video.poster);
+  for (const input of document.querySelectorAll('input[type="image"][src]')) push(input.src);
+  for (const svgImage of document.querySelectorAll("svg image")) {
+    push(svgImage.href?.baseVal || svgImage.getAttribute("href") || svgImage.getAttribute("xlink:href"));
+  }
+  for (const obj of document.querySelectorAll("object[data], embed[src]")) {
+    const u = obj.getAttribute("data") || obj.getAttribute("src");
+    if (imageAttr.test(u || "")) push(u);
+  }
 
   for (const el of document.querySelectorAll("*")) {
     for (const attr of el.attributes) {

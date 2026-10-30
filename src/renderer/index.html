@@ -13,60 +13,86 @@
     <header class="top">
       <div>
         <h1>Поиск людей на сайтах</h1>
-        <p class="lead">Вставьте список сайтов — приложение откроет каждый и покажет, где есть фотографии людей.</p>
+        <p class="lead">Находит фото людей на ваших сайтах и рисует им замену.</p>
       </div>
       <div class="top-right">
-        <span id="version" class="muted"></span>
-        <button id="help-open" class="ghost">Справка</button>
+        <span id="version" class="hint"></span>
+        <div class="segmented" role="group" aria-label="Тема">
+          <button data-theme-pick="auto" title="Как в системе">Авто</button>
+          <button data-theme-pick="light">Светлая</button>
+          <button data-theme-pick="dark">Тёмная</button>
+        </div>
+        <button id="help-open">Справка</button>
       </div>
     </header>
 
     <div id="update" class="banner" hidden>
       <span id="update-text"></span>
-      <button id="update-open" class="ghost">Скачать</button>
+      <button id="update-open" class="primary">Скачать</button>
     </div>
 
     <main>
-      <section class="card">
-        <h2><span class="num">1</span> Ключ для распознавания</h2>
-        <p class="hint">
-          Ключ нужен, чтобы нейросеть смотрела картинки. Выберите, чей у вас ключ, и вставьте его. Проверка
-          пойдёт через выбранный сервис.
-        </p>
-        <div id="providers" class="segmented" role="radiogroup" aria-label="Чей ключ"></div>
-        <p id="key-hint" class="hint"></p>
-        <div class="row">
-          <input id="key" type="password" placeholder="Вставьте ключ" autocomplete="off" spellcheck="false" />
-          <button id="key-toggle" class="ghost" title="Показать или скрыть ключ">Показать</button>
-          <button id="key-save">Сохранить и проверить</button>
-        </div>
-        <p id="key-status" class="status"></p>
-      </section>
-
-      <section class="card">
-        <h2><span class="num">2</span> Список сайтов</h2>
-        <p class="hint">
-          Вставьте домены — по одному в строке или столбцом из Excel. Лишнее (https://, www, адреса страниц,
-          повторы) приложение уберёт само.
-        </p>
-        <textarea id="domains" rows="8" spellcheck="false" placeholder="site1.ru&#10;https://www.site2.ru/&#10;site3.ru"></textarea>
-        <div class="row between">
-          <span id="domains-count" class="muted">Доменов: 0</span>
-          <div class="row">
-            <button id="scan-again" class="ghost" title="Проверить все сайты списка ещё раз, даже уже проверенные">
-              Проверить заново
-            </button>
-            <button id="scan-start" class="primary">Проверить сайты</button>
-            <button id="scan-stop" class="danger" hidden>Остановить</button>
+      <details class="card fold" id="key-card" open>
+        <summary>
+          <h2><span class="num">1</span> Ключ</h2>
+          <span id="key-summary" class="fold-note"></span>
+        </summary>
+        <div class="fold-body">
+          <div class="key-row">
+            <select id="provider" aria-label="Сервис"></select>
+            <input id="key" type="password" placeholder="Вставьте ключ" autocomplete="off" spellcheck="false" />
+            <button id="key-toggle" title="Показать или скрыть ключ">Показать</button>
+            <button id="key-save" class="primary">Сохранить</button>
           </div>
+          <p id="key-hint" class="hint"></p>
+          <p id="key-status" class="status"></p>
+          <details class="box">
+            <summary>Настройки — можно не трогать</summary>
+            <p class="tip">
+              Для поиска людей хватает самой дешёвой модели, которая понимает картинки, например
+              <code>google/gemini-2.5-flash-lite</code>. Пустое поле — она и будет.
+            </p>
+            <div class="models">
+              <label for="recognize-model">Поиск людей</label>
+              <input id="recognize-model" type="text" spellcheck="false" />
+              <label for="draw-model">Новые кадры</label>
+              <input id="draw-model" type="text" spellcheck="false" />
+              <label for="redraw-rules">Как рисовать</label>
+              <textarea id="redraw-rules" rows="4"></textarea>
+            </div>
+            <div class="row">
+              <button id="rules-reset">Вернуть как было</button>
+              <span class="hint">Изменения применятся после «Сохранить».</span>
+            </div>
+          </details>
         </div>
-        <div id="progress" class="progress" hidden>
-          <div class="bar"><div id="progress-fill"></div></div>
-          <p id="progress-text" class="muted"></p>
-          <ul id="progress-sites" class="working"></ul>
+      </details>
+
+      <details class="card fold" id="sites-card" open>
+        <summary>
+          <h2><span class="num">2</span> Сайты</h2>
+          <span id="domains-count" class="fold-note">0 доменов</span>
+        </summary>
+        <div class="fold-body">
+          <textarea id="domains" rows="5" spellcheck="false" placeholder="Перетащите сюда файл Excel, CSV или TXT — или вставьте домены, по одному в строке"></textarea>
+          <div class="row between">
+            <button id="domains-import">Загрузить из файла…</button>
+            <div class="row">
+              <button id="scan-again" class="ghost" title="Проверить все сайты списка ещё раз, даже уже проверенные">
+                Проверить заново
+              </button>
+              <button id="scan-start" class="primary">Проверить сайты</button>
+              <button id="scan-stop" class="danger" hidden>Остановить</button>
+            </div>
+          </div>
+          <div id="progress" class="progress" hidden>
+            <div class="bar"><div id="progress-fill"></div></div>
+            <p id="progress-text" class="hint"></p>
+            <ul id="progress-sites" class="working"></ul>
+          </div>
+          <p id="scan-status" class="status"></p>
         </div>
-        <p id="scan-status" class="status"></p>
-      </section>
+      </details>
 
       <section class="card">
         <div class="row between">
@@ -77,6 +103,7 @@
           </div>
         </div>
         <div id="chips" class="chips"></div>
+        <div class="table-wrap">
         <table class="results">
           <thead>
             <tr>
@@ -84,52 +111,84 @@
               <th>Итог</th>
               <th class="n">С людьми</th>
               <th class="n">Глазами</th>
+              <th class="n">Новых</th>
               <th class="n">Кадров</th>
-              <th class="n">Страниц</th>
             </tr>
           </thead>
           <tbody id="rows"></tbody>
         </table>
+        </div>
         <p id="empty" class="muted center">Пока ничего не проверено.</p>
       </section>
     </main>
+
+    <div id="viewer" class="modal" hidden>
+      <div class="modal-box wide">
+        <div class="row between">
+          <h2 id="viewer-title"></h2>
+          <div class="row">
+            <button id="viewer-prev" class="icon" title="Предыдущий кадр (←)">‹</button>
+            <span id="viewer-pos" class="hint"></span>
+            <button id="viewer-next" class="icon" title="Следующий кадр (→)">›</button>
+            <button id="viewer-close">Закрыть</button>
+          </div>
+        </div>
+        <p class="viewer-page">Страница: <a id="viewer-page"></a></p>
+        <div class="compare">
+          <figure>
+            <figcaption>Сейчас на сайте <span id="viewer-old-meta" class="muted"></span></figcaption>
+            <div class="frame"><img id="viewer-old" alt="" /><span id="viewer-old-wait" class="muted">Загружаю…</span></div>
+          </figure>
+          <figure>
+            <figcaption>Новый кадр <span id="viewer-new-meta" class="muted"></span></figcaption>
+            <div class="frame"><img id="viewer-new" alt="" /><span id="viewer-new-wait" class="muted"></span></div>
+          </figure>
+        </div>
+        <details id="viewer-prompt-box" class="box">
+          <summary>Описание для нейросети</summary>
+          <p class="hint">Пусто — нейросеть опишет кадр сама. Можно написать своё, например «мастер чинит кофемашину».</p>
+          <textarea id="viewer-prompt" rows="4" spellcheck="false"></textarea>
+        </details>
+        <div class="row between">
+          <span id="viewer-status" class="status"></span>
+          <div class="row push-right">
+            <button id="viewer-save">Скачать на компьютер</button>
+            <button id="viewer-redraw" class="primary">Перерисовать</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <div id="help" class="modal" hidden>
       <div class="modal-box">
         <div class="row between">
           <h2>Справка</h2>
-          <button id="help-close" class="ghost">Закрыть</button>
+          <button id="help-close">Закрыть</button>
         </div>
-        <h3>Что делает приложение</h3>
-        <p>
-          Открывает каждый сайт из списка, как обычный браузер: главную и до 20 внутренних страниц. Собирает
-          все картинки, отбрасывает мелочь (иконки, логотипы) и показывает каждую нейросети с вопросом «есть ли
-          на фотографии человек». Сайты не меняются — приложение только смотрит.
-        </p>
-        <h3>Что значит итог</h3>
+        <h3>Как работать</h3>
+        <ol>
+          <li>Выберите сервис, вставьте ключ → «Сохранить».</li>
+          <li>Загрузите файл с сайтами (Excel, CSV, TXT) → «Проверить сайты».</li>
+          <li>Нажмите на сайт с отметкой «Есть люди» → на кадр → «Перерисовать».</li>
+          <li>«Скачать на компьютер» → загрузите файл на сайт вместо старого.</li>
+        </ol>
+        <h3>Итог</h3>
         <ul>
-          <li><b class="v-people">Есть люди</b> — хотя бы на одной фотографии есть человек. Нажмите на строку — увидите эти кадры.</li>
-          <li><b class="v-unsure">Проверить глазами</b> — людей не нашлось, но часть кадров нейросеть не разобрала. Посмотрите их сами.</li>
-          <li><b class="v-clean">Людей нет</b> — все кадры проверены, людей на них нет.</li>
-          <li><b class="v-error">Сайт не открылся</b> — причина написана в строке: домен не продлён, сервер не отвечает и т. п.</li>
+          <li><b class="v-people">Есть люди</b> — нужно заменить кадры.</li>
+          <li><b class="v-unsure">Проверить глазами</b> — нейросеть не уверена, посмотрите сами.</li>
+          <li><b class="v-clean">Людей нет</b> — ничего делать не нужно.</li>
+          <li><b class="v-error">Сайт не открылся</b> — причина в строке.</li>
         </ul>
-        <p>
-          Приложение отвечает только на вопрос «есть ли человек». Стоковое это фото или своё — оно не знает.
-        </p>
-        <h3>Кнопки</h3>
+        <h3>Полезно знать</h3>
         <ul>
-          <li><b>Проверить сайты</b> — проверяет сайты списка, которые ещё не проверены. Можно дописать новые домены и нажать снова.</li>
-          <li><b>Остановить</b> — прерывает проверку. Готовые сайты сохраняются; недоделанные проверятся при следующем нажатии.</li>
-          <li><b>Проверить заново</b> — проверяет весь список ещё раз, даже уже проверенные сайты.</li>
-          <li><b>Очистить</b> — стирает сохранённые результаты. Список доменов остаётся.</li>
-          <li><b>Сохранить в Excel</b> — файл с двумя листами: сайты с итогом и список кадров с людьми со ссылками.</li>
+          <li>С ключом Anthropic можно только искать людей — рисовать он не умеет.</li>
+          <li>Новый кадр — того же размера, что старый, уже сжат для сайта.</li>
+          <li>«Скачать новые кадры в папку» кладёт рядом файл replacements.csv — что на что менять.</li>
+          <li>Всё сохраняется само — приложение можно закрыть.</li>
         </ul>
-        <p>Результаты сохраняются сами: приложение можно закрыть и открыть позже.</p>
-        <h3>Если система не даёт запустить приложение</h3>
-        <p><b>Mac:</b> откройте приложение двойным кликом, в окне «Apple не может проверить…» нажмите «Готово».
-          Затем: Системные настройки → Конфиденциальность и безопасность → внизу «Всё равно открыть» → пароль Mac.</p>
-        <p><b>Windows:</b> в синем окне «Система Windows защитила ваш компьютер» нажмите «Подробнее» →
-          «Выполнить в любом случае».</p>
+        <h3>Система не даёт запустить?</h3>
+        <p><b>Mac:</b> «Готово» → Системные настройки → Конфиденциальность и безопасность → «Всё равно открыть».</p>
+        <p><b>Windows:</b> «Подробнее» → «Выполнить в любом случае».</p>
       </div>
     </div>
 

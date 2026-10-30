@@ -1,7 +1,9 @@
 "use strict";
 
-const IMAGE_EXT = /\.(?:jpe?g|png|webp|avif|gif|bmp|heic)(?:$|[?#])/i;
-const SKIP_EXT = /\.(?:svg|ico)(?:$|[?#])/i;
+// Raster formats only: photos live in these. SVG and ICO are icons and logos —
+// checking them would only spend the model.
+const IMAGE_EXT = /\.(?:jpe?g|jfif|pjpeg|png|apng|webp|avif|gif|bmp|tiff?|heic|heif|jxl)(?:$|[?#])/i;
+const SKIP_EXT = /\.(?:svgz?|ico|cur)(?:$|[?#])/i;
 
 // Tilda serves one upload under several CDN hosts and transform paths:
 //   static.tildacdn.com/tild3335-…/photo.jpg            (original)

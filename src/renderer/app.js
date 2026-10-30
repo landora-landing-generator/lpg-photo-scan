@@ -1,7 +1,7 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const api = window.api;
+const ipc = window.api;
 
 const VERDICT = {
   people: "Есть люди",
@@ -12,24 +12,25 @@ const VERDICT = {
 };
 
 const state = {
-  hosts: [], // parsed domain list, in order
+  hosts: [], // [{ host, label }] in list order; host is punycode, label is for people
   results: {}, // host → result
   filter: null, // verdict shown, null = all
   open: new Set(), // expanded rows
-  running: false,
   working: new Map(), // host → current step
   total: 0,
   doneNow: 0,
+  redrawSite: null, // { host, done, total } while a site-wide redraw runs
 };
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
     if (k === "class") node.className = v;
     else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
-    else node.setAttribute(k, v);
+    else node.setAttribute(k, v === true ? "" : v);
   }
-  for (const c of children) if (c != null) node.append(c);
+  for (const c of children) if (c != null && c !== false) node.append(c);
   return node;
 }
 
@@ -38,9 +39,49 @@ function setStatus(id, text, kind = "") {
   $(id).className = `status ${kind}`;
 }
 
-const verdictOf = (host) => state.results[host]?.verdict ?? "none";
+function plural(n, one, few, many) {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  const word = m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+  return `${n} ${word}`;
+}
 
-// ---------- key ----------
+const kb = (bytes) => (bytes >= 1024 * 1024 ? `${(bytes / 1048576).toFixed(1)} МБ` : `${Math.max(1, Math.round(bytes / 1024))} КБ`);
+const labelOf = (host) => state.hosts.find((h) => h.host === host)?.label ?? host;
+const verdictOf = (host) => state.results[host]?.verdict ?? "none";
+const imagesOf = (r) => [...(r?.people ?? []), ...(r?.unsure ?? [])];
+
+// ---------- key: one service, one key ----------
+
+const keys = { providers: [], settings: null, defaultRules: "" };
+const providerById = (id) => keys.providers.find((p) => p.id === id);
+
+function renderProvider() {
+  const p = providerById($("provider").value);
+  if (!p) return;
+  $("key-hint").textContent = `Где взять: ${p.hint}. Цена: ${p.scanCost}${p.canDraw ? `, новый кадр ${p.drawCost}` : ""}.${
+    p.canDraw ? "" : " Этот сервис только ищет людей — рисовать новые кадры он не умеет."
+  }`;
+  $("recognize-model").placeholder = `по умолчанию ${p.visionModel}`;
+  $("draw-model").placeholder = p.canDraw ? `по умолчанию ${p.drawModel}` : "этот сервис не рисует";
+  $("draw-model").disabled = !p.canDraw;
+}
+
+/** Folded card title: which service, and whether its key works. */
+function renderKeySummary(ok) {
+  const p = providerById($("provider").value);
+  const has = $("key").value.trim() !== "";
+  $("key-summary").textContent = has ? `${p.label}${ok === false ? " — ключ не принят" : ok ? " ✓" : ""}` : "не задан";
+  $("key-summary").className = `fold-note${ok ? " ok" : ""}`;
+}
+
+$("provider").addEventListener("change", () => {
+  // Each service remembers its own key, so switching back loses nothing.
+  $("key").value = keys.settings.keys[$("provider").value] ?? "";
+  setStatus("key-status", "");
+  renderProvider();
+  renderKeySummary();
+});
 
 $("key-toggle").addEventListener("click", () => {
   const show = $("key").type === "password";
@@ -48,49 +89,30 @@ $("key-toggle").addEventListener("click", () => {
   $("key-toggle").textContent = show ? "Скрыть" : "Показать";
 });
 
-const keyState = { providers: [], provider: "openrouter", keys: {} };
-
-function renderProviders() {
-  $("providers").replaceChildren(
-    ...keyState.providers.map((p) =>
-      el(
-        "button",
-        {
-          role: "radio",
-          "aria-checked": String(p.id === keyState.provider),
-          onclick: () => selectProvider(p.id),
-        },
-        p.label,
-      ),
-    ),
-  );
-  const p = keyState.providers.find((x) => x.id === keyState.provider);
-  $("key-hint").textContent = p ? `${p.hint} Стоимость: ${p.cost}.` : "";
-}
-
-function selectProvider(id) {
-  keyState.keys[keyState.provider] = $("key").value.trim();
-  keyState.provider = id;
-  $("key").value = keyState.keys[id] ?? "";
-  // A key saved earlier for this service becomes active at once; a new one waits for "Сохранить и проверить".
-  if (keyState.keys[id]) {
-    api.saveKey(id, keyState.keys[id]);
-    setStatus("key-status", "Ключ сохранён — проверка пойдёт через этот сервис.", "ok");
-  } else {
-    setStatus("key-status", "");
-  }
-  renderProviders();
-}
+$("rules-reset").addEventListener("click", () => {
+  $("redraw-rules").value = keys.defaultRules;
+});
 
 $("key-save").addEventListener("click", async () => {
+  const provider = $("provider").value;
   const key = $("key").value.trim();
   setStatus("key-status", "Проверяю ключ…");
-  const res = await api.checkKey(keyState.provider, key);
-  if (res.ok) {
-    await api.saveKey(keyState.provider, key);
-    keyState.keys[keyState.provider] = key;
+  const rules = $("redraw-rules").value.trim();
+  const res = await ipc.saveSettings({
+    provider,
+    key,
+    models: { recognize: $("recognize-model").value, draw: $("draw-model").value },
+    // The default text is stored as "use the default", so it follows app updates.
+    redrawRules: rules === keys.defaultRules ? "" : rules,
+  });
+  if (res.error) {
+    setStatus("key-status", res.error, "bad");
+    return;
   }
-  setStatus("key-status", res.message + (res.ok ? " Ключ сохранён — проверка пойдёт через него." : ""), res.ok ? "ok" : "bad");
+  keys.settings.keys[provider] = key;
+  setStatus("key-status", res.ok ? `Ключ ${res.message}.` : `Ключ ${res.message}.`, res.ok ? "ok" : "bad");
+  renderKeySummary(res.ok);
+  if (res.ok) setTimeout(() => ($("key-card").open = false), 900);
 });
 
 // ---------- domains ----------
@@ -102,17 +124,51 @@ $("domains").addEventListener("input", () => {
 });
 
 async function refreshDomains() {
-  state.hosts = await api.parseDomains($("domains").value);
-  $("domains-count").textContent = `Доменов: ${state.hosts.length}`;
+  state.hosts = await ipc.parseDomains($("domains").value);
+  $("domains-count").textContent = plural(state.hosts.length, "домен", "домена", "доменов");
   render();
 }
+
+/** Adds imported domains under the ones already in the field. */
+async function addImported(res) {
+  if (res.error) {
+    setStatus("scan-status", res.error, "bad");
+    return;
+  }
+  if (!res.domains?.length) return;
+  const before = state.hosts.length;
+  const current = $("domains").value.trim();
+  $("domains").value = (current ? `${current}\n` : "") + res.domains.join("\n");
+  await refreshDomains();
+  setStatus("scan-status", `Добавлено доменов: ${state.hosts.length - before}.`, "ok");
+}
+
+$("domains-import").addEventListener("click", async () => addImported(await ipc.importDomains()));
+
+const domainsBox = $("domains");
+domainsBox.addEventListener("dragover", (e) => {
+  if (e.dataTransfer?.types.includes("Files")) {
+    e.preventDefault();
+    domainsBox.classList.add("drop");
+  }
+});
+domainsBox.addEventListener("dragleave", () => domainsBox.classList.remove("drop"));
+domainsBox.addEventListener("drop", async (e) => {
+  if (!e.dataTransfer?.files?.length) return;
+  e.preventDefault();
+  domainsBox.classList.remove("drop");
+  addImported(await ipc.importDroppedFiles(e.dataTransfer.files));
+});
+// A file dropped anywhere else must not navigate the window away.
+document.addEventListener("dragover", (e) => e.preventDefault());
+document.addEventListener("drop", (e) => e.preventDefault());
 
 // ---------- scan ----------
 
 async function start(again) {
   setStatus("scan-status", "");
   await refreshDomains();
-  const res = await api.startScan($("domains").value, again);
+  const res = await ipc.startScan($("domains").value, again);
   if (res?.error) setStatus("scan-status", res.error, "bad");
 }
 
@@ -123,13 +179,13 @@ $("scan-again").addEventListener("click", () => {
 $("scan-stop").addEventListener("click", () => {
   $("scan-stop").disabled = true;
   $("scan-stop").textContent = "Останавливаю…";
-  api.stopScan();
+  ipc.stopScan();
 });
 
 function setRunning(on) {
-  state.running = on;
   $("scan-start").hidden = on;
   $("scan-again").hidden = on;
+  $("domains-import").disabled = on;
   $("scan-stop").hidden = !on;
   $("scan-stop").disabled = false;
   $("scan-stop").textContent = "Остановить";
@@ -142,74 +198,130 @@ function renderProgress() {
   const pct = state.total ? Math.round((state.doneNow / state.total) * 100) : 0;
   $("progress-fill").style.width = `${pct}%`;
   $("progress-text").textContent = `Проверено ${state.doneNow} из ${state.total}`;
-  $("progress-sites").replaceChildren(
-    ...[...state.working].map(([host, step]) => el("li", {}, `${host} — ${step}`)),
-  );
+  $("progress-sites").replaceChildren(...[...state.working].map(([host, step]) => el("li", {}, `${labelOf(host)} — ${step}`)));
 }
 
-api.onBegin(({ total }) => {
+ipc.onBegin(({ total }) => {
   state.total = total;
   state.doneNow = 0;
   state.working.clear();
   setRunning(true);
   renderProgress();
 });
-api.onProgress(({ host, step }) => {
+ipc.onProgress(({ host, step }) => {
   state.working.set(host, step);
   renderProgress();
 });
-api.onSite((result) => {
+ipc.onSite((result) => {
   state.results[result.host] = result;
   state.working.delete(result.host);
   state.doneNow++;
   renderProgress();
   render();
 });
-api.onEnd(({ stopped, fatal }) => {
+ipc.onEnd(({ stopped, fatal }) => {
   setRunning(false);
-  if (fatal) setStatus("scan-status", `Проверка остановлена: ${fatal}`, "bad");
-  else if (stopped) setStatus("scan-status", `Остановлено. Проверено ${state.doneNow} из ${state.total}; остальные проверятся при следующем нажатии «Проверить сайты».`);
+  if (fatal) {
+    setStatus("scan-status", `Проверка остановлена: ${fatal}`, "bad");
+    $("key-card").open = true;
+  }
+  else if (stopped) setStatus("scan-status", `Остановлено на ${state.doneNow} из ${state.total}. Остальные проверятся при следующем нажатии.`);
   else setStatus("scan-status", `Готово: проверено сайтов — ${state.doneNow}.`, "ok");
 });
 
 // ---------- results ----------
 
 $("clear").addEventListener("click", async () => {
-  if (!confirm("Стереть сохранённые результаты проверки? Список доменов останется.")) return;
-  await api.clearResults();
+  if (!confirm("Стереть результаты проверки? Список доменов останется.")) return;
+  await ipc.clearResults();
   state.results = {};
   state.open.clear();
   render();
 });
 
 $("excel").addEventListener("click", async () => {
-  const res = await api.saveExcel();
-  if (res.saved) setStatus("scan-status", `Сохранено: ${res.filePath}`, "ok");
+  const res = await ipc.saveExcel();
+  if (res.error) setStatus("scan-status", res.error, "bad");
+  else if (res.saved) setStatus("scan-status", `Сохранено: ${res.filePath}`, "ok");
+});
+
+ipc.onImageUpdated(({ host, image }) => {
+  const r = state.results[host];
+  if (!r) return;
+  for (const list of [r.people, r.unsure]) {
+    const i = list.findIndex((x) => x.id === image.id);
+    if (i >= 0) list[i] = image;
+  }
+  render();
+});
+
+ipc.onRedrawProgress((p) => {
+  state.redrawSite = p.finished ? null : p;
+  render();
 });
 
 function renderChips() {
   const counts = { people: 0, unsure: 0, clean: 0, error: 0, none: 0 };
-  for (const h of state.hosts) counts[verdictOf(h)]++;
-  const chips = Object.entries(counts)
-    .filter(([, n]) => n > 0)
-    .map(([v, n]) =>
+  for (const { host } of state.hosts) counts[verdictOf(host)]++;
+  $("chips").replaceChildren(
+    ...Object.entries(counts)
+      .filter(([, n]) => n > 0)
+      .map(([v, n]) =>
+        el(
+          "button",
+          {
+            class: `chip ${v}${state.filter === v ? " active" : ""}`,
+            title: state.filter === v ? "Показать все" : "Показать только эти",
+            onclick: () => {
+              state.filter = state.filter === v ? null : v;
+              render();
+            },
+          },
+          `${VERDICT[v]}: ${n}`,
+        ),
+      ),
+  );
+}
+
+function siteActions(host, r) {
+  const drawn = imagesOf(r).filter((img) => img.redraw).length;
+  const left = r.people.filter((img) => !img.redraw).length;
+  const busy = state.redrawSite;
+  const mine = busy?.host === host;
+  return el(
+    "div",
+    { class: "site-actions" },
+    mine
+      ? el("button", { class: "danger", onclick: () => ipc.stopRedrawSite() }, `Остановить (готово ${busy.done} из ${busy.total})`)
+      : left > 0 &&
+          el(
+            "button",
+            {
+              class: "primary",
+              disabled: Boolean(busy),
+              onclick: async () => {
+                const res = await ipc.redrawSite(host);
+                if (res.error) alert(res.error);
+                else if (res.errors?.length) alert(`Не получилось ${res.errors.length} кадр(ов):\n${res.errors.slice(0, 3).join("\n")}`);
+              },
+            },
+            `Перерисовать все кадры с людьми (${left})`,
+          ),
+    drawn > 0 &&
       el(
         "button",
         {
-          class: `chip ${v}${state.filter === v ? " active" : ""}`,
-          title: state.filter === v ? "Показать все" : "Показать только эти",
-          onclick: () => {
-            state.filter = state.filter === v ? null : v;
-            render();
+          onclick: async () => {
+            const res = await ipc.saveSite(host);
+            if (res.error) alert(res.error);
           },
         },
-        `${VERDICT[v]}: ${n}`,
+        `Скачать новые кадры в папку (${drawn})`,
       ),
-    );
-  $("chips").replaceChildren(...chips);
+  );
 }
 
-function thumbGrid(r) {
+function thumbGrid(host, r) {
   const grid = el("div", { class: "thumbs" });
   for (const [list, label] of [
     [r.people, "Кадры с людьми"],
@@ -218,34 +330,34 @@ function thumbGrid(r) {
     if (!list.length) continue;
     grid.append(el("div", { class: "label" }, `${label} (${list.length})`));
     for (const img of list) {
-      const path = (() => {
-        try {
-          return new URL(img.page).pathname;
-        } catch {
-          return img.page;
-        }
-      })();
+      let pagePath = img.page;
+      try {
+        pagePath = decodeURI(new URL(img.page).pathname);
+      } catch {
+        /* keep as is */
+      }
       grid.append(
         el(
           "figure",
           {},
-          el("img", { src: img.thumb, alt: "", title: "Открыть картинку в браузере", onclick: () => api.openExternal(img.url) }),
-          el("figcaption", {}, "стр. ", el("a", { onclick: () => api.openExternal(img.page), title: img.page }, path)),
+          img.redraw && el("span", { class: "badge" }, "✓ новый"),
+          el("img", { src: img.thumb, alt: "", title: "Открыть: посмотреть, перерисовать, скачать", onclick: () => openViewer(host, img.id) }),
+          el("figcaption", {}, `стр. ${pagePath}`),
         ),
       );
     }
   }
-  return grid;
+  return el("div", {}, siteActions(host, r), grid);
 }
 
 function render() {
   renderChips();
   const rows = [];
-  for (const host of state.hosts) {
+  for (const { host, label } of state.hosts) {
     const v = verdictOf(host);
     if (state.filter && state.filter !== v) continue;
     const r = state.results[host];
-    const expandable = r && (r.people.length || r.unsure.length);
+    const expandable = r && imagesOf(r).length > 0;
     const isOpen = expandable && state.open.has(host);
     const note = r?.error ?? (r?.unchecked ? `не проверено кадров: ${r.unchecked}` : null);
     rows.push(
@@ -253,29 +365,173 @@ function render() {
         "tr",
         {
           class: `site${isOpen ? " open" : ""}`,
-          title: expandable ? "Нажмите, чтобы увидеть кадры" : "",
+          title: expandable ? "Нажмите, чтобы увидеть кадры" : null,
           onclick: () => {
             if (!expandable) return;
             state.open.has(host) ? state.open.delete(host) : state.open.add(host);
             render();
           },
         },
-        el("td", {}, `${expandable ? (isOpen ? "▾ " : "▸ ") : ""}${host}`, note ? el("div", { class: "note" }, note) : null),
+        el(
+          "td",
+          {},
+          el("span", { class: "caret" }, expandable ? (isOpen ? "▾" : "▸") : ""),
+          el("span", { class: "site-name" }, label),
+          note ? el("div", { class: "note" }, note) : null,
+        ),
         el("td", {}, el("span", { class: `tag ${v}` }, VERDICT[v])),
         el("td", { class: "n" }, r ? String(r.people.length) : ""),
         el("td", { class: "n" }, r ? String(r.unsure.length) : ""),
+        el("td", { class: "n" }, r ? String(imagesOf(r).filter((i) => i.redraw).length || "") : ""),
         el("td", { class: "n" }, r && !r.error ? String(r.images) : ""),
-        el("td", { class: "n" }, r && !r.error ? String(r.pages) : ""),
       ),
     );
-    if (isOpen) rows.push(el("tr", {}, el("td", { colspan: "6" }, thumbGrid(r))));
+    if (isOpen) rows.push(el("tr", { class: "details" }, el("td", { colspan: "6" }, thumbGrid(host, r))));
   }
   $("rows").replaceChildren(...rows);
   $("empty").hidden = rows.length > 0;
   $("empty").textContent = state.hosts.length ? "Нет сайтов с таким итогом." : "Пока ничего не проверено.";
 }
 
-// ---------- help, update, init ----------
+// ---------- viewer: look, redraw, download ----------
+
+const viewer = { host: null, id: null, busy: false };
+
+function viewerList() {
+  return imagesOf(state.results[viewer.host]);
+}
+
+function currentImage() {
+  return viewerList().find((img) => img.id === viewer.id);
+}
+
+async function openViewer(host, id) {
+  viewer.host = host;
+  viewer.id = id;
+  $("viewer").hidden = false;
+  await showViewerImage();
+}
+
+async function showViewerImage() {
+  const img = currentImage();
+  if (!img) return;
+  const list = viewerList();
+  const pos = list.findIndex((x) => x.id === img.id);
+  $("viewer-title").textContent = labelOf(viewer.host);
+  $("viewer-pos").textContent = `${pos + 1} из ${list.length}`;
+  $("viewer-prev").disabled = pos <= 0;
+  $("viewer-next").disabled = pos >= list.length - 1;
+  $("viewer-page").textContent = img.page;
+  $("viewer-page").onclick = () => ipc.openExternal(img.page);
+  $("viewer-old-meta").textContent = img.width ? `· ${img.width}×${img.height}, ${kb(img.bytes)}` : "";
+  $("viewer-prompt").value = img.redraw?.prompt ?? "";
+  setStatus("viewer-status", "");
+
+  // Thumbnail first, the full-size original as soon as it arrives.
+  $("viewer-old").src = img.thumb;
+  $("viewer-old-wait").hidden = true;
+  const id = img.id;
+  ipc.originalImage(viewer.host, id).then((res) => {
+    if (viewer.id !== id) return;
+    if (typeof res === "string") $("viewer-old").src = res;
+  });
+  await showRedrawn(img);
+}
+
+async function showRedrawn(img) {
+  const preview = img.redraw ? await ipc.redrawnImage(viewer.host, img.id) : null;
+  if (preview) {
+    $("viewer-new").src = preview;
+    $("viewer-new-wait").hidden = true;
+    $("viewer-new-meta").textContent = `· ${img.redraw.width}×${img.redraw.height}, ${kb(img.redraw.bytes)}, JPEG для сайта`;
+  } else {
+    $("viewer-new").removeAttribute("src");
+    $("viewer-new-wait").hidden = false;
+    $("viewer-new-wait").textContent = "Ещё не перерисован — нажмите «Перерисовать».";
+    $("viewer-new-meta").textContent = "";
+  }
+  $("viewer-redraw").textContent = img.redraw ? "Перерисовать ещё раз" : "Перерисовать";
+  $("viewer-save").disabled = !img.redraw;
+}
+
+function step(delta) {
+  if (viewer.busy) return;
+  const list = viewerList();
+  const pos = list.findIndex((x) => x.id === viewer.id) + delta;
+  if (pos < 0 || pos >= list.length) return;
+  viewer.id = list[pos].id;
+  showViewerImage();
+}
+
+function closeViewer() {
+  if (viewer.busy) return;
+  $("viewer").hidden = true;
+}
+
+$("viewer-prev").addEventListener("click", () => step(-1));
+$("viewer-next").addEventListener("click", () => step(1));
+$("viewer-close").addEventListener("click", closeViewer);
+$("viewer").addEventListener("click", (e) => {
+  if (e.target === $("viewer")) closeViewer();
+});
+
+$("viewer-redraw").addEventListener("click", async () => {
+  const img = currentImage();
+  if (!img || viewer.busy) return;
+  viewer.busy = true;
+  $("viewer-redraw").disabled = true;
+  $("viewer-save").disabled = true;
+  $("viewer-new-wait").hidden = false;
+  $("viewer-new-wait").textContent = "Рисую новый кадр… обычно 10–40 секунд.";
+  $("viewer-new").removeAttribute("src");
+  setStatus("viewer-status", "");
+  const res = await ipc.redrawImage(viewer.host, img.id, $("viewer-prompt").value);
+  viewer.busy = false;
+  $("viewer-redraw").disabled = false;
+  if (res.error) {
+    setStatus("viewer-status", res.error, "bad");
+    await showRedrawn(currentImage());
+    return;
+  }
+  $("viewer-prompt").value = res.image.redraw.prompt;
+  await showRedrawn(res.image);
+  setStatus("viewer-status", "Готово. Не нравится — поправьте описание и перерисуйте.", "ok");
+});
+
+$("viewer-save").addEventListener("click", async () => {
+  const res = await ipc.saveImage(viewer.host, viewer.id);
+  if (res.error) setStatus("viewer-status", res.error, "bad");
+  else if (res.saved) setStatus("viewer-status", `Сохранено: ${res.filePath}`, "ok");
+});
+
+// ---------- theme: auto (system), light, dark; remembered per computer ----------
+
+function applyTheme(choice) {
+  if (choice === "light" || choice === "dark") document.documentElement.dataset.theme = choice;
+  else delete document.documentElement.dataset.theme;
+  for (const b of document.querySelectorAll("[data-theme-pick]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.themePick === (choice || "auto")));
+  }
+}
+let savedTheme = "auto";
+try {
+  savedTheme = localStorage.getItem("theme") || "auto";
+} catch {
+  /* storage unavailable — follow the system */
+}
+applyTheme(savedTheme);
+for (const b of document.querySelectorAll("[data-theme-pick]")) {
+  b.addEventListener("click", () => {
+    applyTheme(b.dataset.themePick);
+    try {
+      localStorage.setItem("theme", b.dataset.themePick);
+    } catch {
+      /* not remembered — fine */
+    }
+  });
+}
+
+// ---------- help, update, keyboard, init ----------
 
 $("help-open").addEventListener("click", () => ($("help").hidden = false));
 $("help-close").addEventListener("click", () => ($("help").hidden = true));
@@ -283,26 +539,40 @@ $("help").addEventListener("click", (e) => {
   if (e.target === $("help")) $("help").hidden = true;
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") $("help").hidden = true;
+  if (e.key === "Escape") {
+    $("help").hidden = true;
+    closeViewer();
+  }
+  if (!$("viewer").hidden && e.target.tagName !== "TEXTAREA") {
+    if (e.key === "ArrowLeft") step(-1);
+    if (e.key === "ArrowRight") step(1);
+  }
 });
 
 let updateUrl = null;
-api.onUpdate(({ version, url }) => {
+ipc.onUpdate(({ version, url }) => {
   updateUrl = url;
-  $("update-text").textContent = `Вышла новая версия ${version}. Скачайте её и установите поверх этой — результаты сохранятся.`;
+  $("update-text").textContent = `Вышла версия ${version}. Скачайте и установите поверх — результаты сохранятся.`;
   $("update").hidden = false;
 });
-$("update-open").addEventListener("click", () => updateUrl && api.openExternal(updateUrl));
+$("update-open").addEventListener("click", () => updateUrl && ipc.openExternal(updateUrl));
 
 (async () => {
-  const s = await api.getState();
+  const s = await ipc.getState();
   $("version").textContent = `версия ${s.version}`;
-  keyState.providers = s.providers;
-  keyState.provider = s.provider;
-  keyState.keys = s.keys ?? {};
-  $("key").value = keyState.keys[s.provider] ?? "";
-  renderProviders();
-  if ($("key").value) setStatus("key-status", "Ключ сохранён.", "ok");
+  keys.providers = s.providers;
+  keys.settings = s.settings;
+  keys.defaultRules = s.defaultRedrawRules;
+  $("provider").replaceChildren(...s.providers.map((p) => el("option", { value: p.id }, p.label)));
+  $("provider").value = s.settings.provider;
+  $("key").value = s.settings.keys[s.settings.provider] ?? "";
+  $("recognize-model").value = s.settings.models.recognize;
+  $("draw-model").value = s.settings.models.draw;
+  $("redraw-rules").value = s.settings.redrawRules || s.defaultRedrawRules;
+  renderProvider();
+  renderKeySummary($("key").value ? true : undefined);
+  // A saved key needs no attention: start folded, the list and results in focus.
+  if ($("key").value) $("key-card").open = false;
   $("domains").value = s.domainsText ?? "";
   state.results = s.results ?? {};
   await refreshDomains();

@@ -1,5 +1,7 @@
 "use strict";
 
+const { domainToUnicode } = require("node:url");
+
 /**
  * Turns whatever the user pasted (an Excel column, URLs, text with commas)
  * into a clean, de-duplicated list of hostnames in input order.
@@ -17,10 +19,13 @@ function parseDomains(text) {
   return out;
 }
 
+const NOT_A_TLD = /^[^/]+\.(?:jpe?g|png|gif|webp|svg|pdf|docx?|xlsx?|csv|txt|zip|rar|html?|php|js|css|json|xml|exe|dmg)$/i;
+
 /** "https://www.Site.ru/page?x" → "site.ru"; garbage → null. */
 function normalizeHost(raw) {
   let s = String(raw).trim().replace(/^["'«(]+|["'»).]+$/g, "");
-  if (!s) return null;
+  // E-mails and file names in a spreadsheet look like domains but are not sites.
+  if (!s || s.includes("@") || NOT_A_TLD.test(s)) return null;
   if (!/^[a-z]+:\/\//i.test(s)) s = `http://${s}`;
   let host;
   try {
@@ -44,4 +49,7 @@ function sameSite(url, host) {
   }
 }
 
-module.exports = { parseDomains, normalizeHost, sameSite };
+/** "xn--e1afmkfd.xn--p1ai" → "пример.рф" for people; the punycode form stays the key. */
+const displayHost = (host) => domainToUnicode(host) || host;
+
+module.exports = { parseDomains, normalizeHost, sameSite, displayHost };

@@ -1,11 +1,14 @@
 "use strict";
 
 const { BrowserWindow, session } = require("electron");
+const crypto = require("node:crypto");
 const sharp = require("sharp");
 const { collectScript } = require("./page-collector");
 const { imageKey } = require("./image-urls");
 const { sameSite } = require("./domains");
-const { classify, FatalKeyError } = require("./classify");
+const { classify } = require("./classify");
+const { readImage } = require("./decode");
+const { FatalKeyError } = require("./providers");
 const { createLimiter, withTimeout } = require("./limit");
 const { verdictOf } = require("./verdict");
 
@@ -96,22 +99,28 @@ async function fetchImage(url, referer, signal) {
 }
 
 /** Decodes any web format; small images and decode failures → null (not a photo to check). */
-async function prepareImage(buf) {
-  let meta;
-  try {
-    meta = await sharp(buf, { animated: false }).metadata();
-  } catch {
-    return null;
-  }
-  if (meta.format === "svg") return null;
-  if (!meta.width || !meta.height || Math.max(meta.width, meta.height) < MIN_SIDE) return null;
+async function prepareImage(raw) {
+  const read = await readImage(raw);
+  if (!read) return null;
+  const { buf, meta } = read;
+  if (Math.max(meta.width, meta.height) < MIN_SIDE) return null;
   const base = () => sharp(buf, { animated: false }).rotate().flatten({ background: "#ffffff" });
   const [forModel, thumb] = await Promise.all([
     base().resize(MODEL_SIDE, MODEL_SIDE, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer(),
     base().resize(THUMB_SIDE, THUMB_SIDE, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 70 }).toBuffer(),
   ]);
-  return { forModel, thumb: `data:image/jpeg;base64,${thumb.toString("base64")}`, width: meta.width, height: meta.height };
+  return {
+    forModel,
+    thumb: `data:image/jpeg;base64,${thumb.toString("base64")}`,
+    width: meta.width,
+    height: meta.height,
+    bytes: raw.length,
+    format: meta.format,
+  };
 }
+
+/** Stable id of an image within the app (file names of redraws, IPC). */
+const imageId = (url) => crypto.createHash("sha1").update(url).digest("hex").slice(0, 16);
 
 function crawlTarget(href, host) {
   try {
@@ -199,11 +208,11 @@ async function crawl(host, win, signal, onStep) {
  * onProgress({ host, step }) while working. A bad key or empty balance stops
  * everything and rejects with FatalKeyError.
  */
-async function scanSites({ hosts, creds, signal, onSite, onProgress, siteConcurrency = 3 }) {
+async function scanSites({ hosts, creds, signal, onSite, onProgress, siteConcurrency = 1 }) {
   const inner = new AbortController();
   const stop = AbortSignal.any([signal, inner.signal]);
-  const classifyLimit = createLimiter(6);
-  const fetchLimit = createLimiter(8);
+  const classifyLimit = createLimiter(3);
+  const fetchLimit = createLimiter(4);
   const siteLimit = createLimiter(siteConcurrency);
   let fatal = null;
   let seq = 0;
@@ -235,7 +244,16 @@ async function scanSites({ hosts, creds, signal, onSite, onProgress, siteConcurr
                 if (stop.aborted) throw stop.reason;
                 return classify(creds, prepared.forModel, { signal: stop });
               });
-              const entry = { url: img.download, page: img.page, thumb: prepared.thumb };
+              const entry = {
+                id: imageId(img.download),
+                url: img.download,
+                page: img.page,
+                thumb: prepared.thumb,
+                width: prepared.width,
+                height: prepared.height,
+                bytes: prepared.bytes,
+                format: prepared.format,
+              };
               if (kind === "people") result.people.push(entry);
               else if (kind === "unsure") result.unsure.push(entry);
             } catch (e) {
@@ -265,4 +283,4 @@ async function scanSites({ hosts, creds, signal, onSite, onProgress, siteConcurr
   if (fatal) throw fatal;
 }
 
-module.exports = { scanSites };
+module.exports = { scanSites, fetchImage, UA };

@@ -2,6 +2,7 @@
 
 const ExcelJS = require("exceljs");
 const { VERDICT_TEXT } = require("./verdict");
+const { displayHost } = require("./domains");
 
 const FILL = {
   people: "FFFDE2C2",
@@ -30,7 +31,7 @@ async function writeExcel(filePath, hosts, results) {
     const row = sites.addRow(
       r
         ? {
-            host,
+            host: displayHost(host),
             verdict: VERDICT_TEXT[r.verdict],
             people: r.people.length,
             unsure: r.unsure.length,
@@ -39,7 +40,7 @@ async function writeExcel(filePath, hosts, results) {
             note: r.error ?? (r.unchecked ? `не проверено кадров: ${r.unchecked}` : ""),
             checkedAt: r.checkedAt ? new Date(r.checkedAt) : null,
           }
-        : { host, verdict: "Не проверен" },
+        : { host: displayHost(host), verdict: "Не проверен" },
     );
     if (r) row.getCell("verdict").fill = { type: "pattern", pattern: "solid", fgColor: { argb: FILL[r.verdict] } };
     row.getCell("checkedAt").numFmt = "dd.mm.yyyy hh:mm";
@@ -62,7 +63,7 @@ async function writeExcel(filePath, hosts, results) {
       [r.unsure, "Проверить глазами"],
     ]) {
       for (const img of list) {
-        const row = images.addRow({ host, kind, page: img.page, url: img.url });
+        const row = images.addRow({ host: displayHost(host), kind, page: img.page, url: img.url });
         row.getCell("url").value = { text: img.url, hyperlink: img.url };
         row.getCell("url").font = { color: { argb: "FF1A56DB" }, underline: true };
       }
