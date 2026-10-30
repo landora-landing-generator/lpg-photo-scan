@@ -14,6 +14,7 @@ const { baseName } = require("./redraw-names");
 const { domainsFromFile } = require("./import");
 const { checkForUpdate } = require("./update");
 const { DEFAULT_REDRAW_RULES } = require("./prompts");
+const { loadReference, generate, exportStudio } = require("./studio");
 
 // Developer aids: a separate data folder and a forced theme for screenshots.
 if (process.env.LPG_USER_DATA) app.setPath("userData", process.env.LPG_USER_DATA);
@@ -272,6 +273,41 @@ ipcMain.handle(
   }),
 );
 
+// ---------- studio: a frame from the user's picture or from words ----------
+
+/** Reference picture: a dropped file (path) or one picked in a dialog. */
+ipcMain.handle(
+  "studio:reference",
+  guarded(async (_e, { path: dropped } = {}) => {
+    let file = dropped;
+    if (!file) {
+      const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+        title: "Картинка-образец",
+        properties: ["openFile"],
+        filters: [{ name: "Картинки", extensions: ["jpg", "jpeg", "png", "webp", "avif", "gif", "bmp", "tif", "tiff", "heic"] }],
+      });
+      if (canceled || !filePaths?.[0]) return { canceled: true };
+      file = filePaths[0];
+    }
+    return loadReference(file);
+  }),
+);
+ipcMain.handle("studio:generate", guarded((_e, params) => generate(params)));
+ipcMain.handle(
+  "studio:save",
+  guarded(async (_e, { file }) => {
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      title: "Сохранить кадр",
+      defaultPath: path.join(app.getPath("downloads"), file),
+      filters: [{ name: "JPEG", extensions: ["jpg"] }],
+    });
+    if (canceled || !filePath) return { saved: false };
+    exportStudio(file, filePath);
+    shell.showItemInFolder(filePath);
+    return { saved: true, filePath };
+  }),
+);
+
 ipcMain.handle(
   "excel:save",
   guarded(async () => {
@@ -289,6 +325,12 @@ ipcMain.handle(
     return { saved: true, filePath };
   }),
 );
+
+app.setAboutPanelOptions({
+  applicationName: "Поиск людей на сайтах",
+  copyright: "© 2026 Андрей Цибин",
+  authors: ["Андрей Цибин"],
+});
 
 app.whenReady().then(() => {
   createWindow();

@@ -43,7 +43,9 @@ async function fetchBytes(url, signal) {
 }
 
 /** OpenRouter: /images (image models have no chat endpoint). */
-async function drawOpenRouter(p, model, apiKey, prompt, size, signal) {
+const dataUrl = (jpeg) => `data:image/jpeg;base64,${jpeg.toString("base64")}`;
+
+async function drawOpenRouter(p, model, apiKey, prompt, size, signal, reference) {
   const res = await fetch(`${p.base}/images`, {
     method: "POST",
     signal,
@@ -53,6 +55,7 @@ async function drawOpenRouter(p, model, apiKey, prompt, size, signal) {
       prompt,
       aspect_ratio: aspectRatioFor(size.width, size.height),
       resolution: tierFor(size.width, size.height),
+      ...(reference ? { input_references: [{ type: "image_url", image_url: { url: dataUrl(reference) } }] } : {}),
     }),
   });
   const body = await res.text();
@@ -62,20 +65,30 @@ async function drawOpenRouter(p, model, apiKey, prompt, size, signal) {
   return Buffer.from(b64, "base64");
 }
 
-/** OpenAI: Images API, base64 answer. */
-async function drawOpenAi(p, model, apiKey, prompt, size, signal) {
-  const res = await fetch(`${p.base}/images/generations`, {
-    method: "POST",
-    signal,
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      prompt,
-      n: 1,
-      size: openAiSize(size.width, size.height),
-      quality: "medium",
-    }),
-  });
+/** OpenAI: Images API (edits with a reference), base64 answer. */
+async function drawOpenAi(p, model, apiKey, prompt, size, signal, reference) {
+  let res;
+  if (reference) {
+    const form = new FormData();
+    form.append("model", model);
+    form.append("prompt", prompt);
+    form.append("size", openAiSize(size.width, size.height));
+    form.append("quality", "medium");
+    form.append("image[]", new Blob([reference], { type: "image/jpeg" }), "reference.jpg");
+    res = await fetch(`${p.base}/images/edits`, {
+      method: "POST",
+      signal,
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+    });
+  } else {
+    res = await fetch(`${p.base}/images/generations`, {
+      method: "POST",
+      signal,
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model, prompt, n: 1, size: openAiSize(size.width, size.height), quality: "medium" }),
+    });
+  }
   const body = await res.text();
   if (!res.ok) throw httpError(p, res.status, body);
   const b64 = JSON.parse(body).data?.find((d) => typeof d.b64_json === "string")?.b64_json;
@@ -84,7 +97,7 @@ async function drawOpenAi(p, model, apiKey, prompt, size, signal) {
 }
 
 /** polza.ai: Media API is asynchronous — create, then poll until completed. */
-async function drawPolza(p, model, apiKey, prompt, size, signal) {
+async function drawPolza(p, model, apiKey, prompt, size, signal, reference) {
   const headers = { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
   const res = await fetch(`${p.base}/media`, {
     method: "POST",
@@ -97,6 +110,7 @@ async function drawPolza(p, model, apiKey, prompt, size, signal) {
         aspect_ratio: aspectRatioFor(size.width, size.height),
         image_resolution: tierFor(size.width, size.height),
         output_format: "jpeg",
+        ...(reference ? { images: [{ type: "base64", data: dataUrl(reference) }] } : {}),
       },
     }),
   });
@@ -122,14 +136,17 @@ async function drawPolza(p, model, apiKey, prompt, size, signal) {
   throw new Error("polza.ai не прислал картинку");
 }
 
-/** Draws a new frame for `prompt` sized for an original of `size` pixels. */
-async function drawImage({ provider, apiKey, model }, prompt, size, { signal } = {}) {
+/**
+ * Draws a frame for `prompt` sized for `size` pixels. With `reference` (a JPEG)
+ * the model works from that picture instead of from words alone.
+ */
+async function drawImage({ provider, apiKey, model }, prompt, size, { signal, reference } = {}) {
   const p = providerOf(provider);
   if (!p.drawModel) throw new FatalKeyError(`${p.label} не рисует картинки. Чтобы перерисовывать, возьмите ключ OpenRouter, polza.ai или OpenAI.`);
   const m = model || p.drawModel;
-  if (provider === "openrouter") return drawOpenRouter(p, m, apiKey, prompt, size, signal);
-  if (provider === "openai") return drawOpenAi(p, m, apiKey, prompt, size, signal);
-  return drawPolza(p, m, apiKey, prompt, size, signal);
+  if (provider === "openrouter") return drawOpenRouter(p, m, apiKey, prompt, size, signal, reference);
+  if (provider === "openai") return drawOpenAi(p, m, apiKey, prompt, size, signal, reference);
+  return drawPolza(p, m, apiKey, prompt, size, signal, reference);
 }
 
 module.exports = { drawImage, aspectRatioFor, openAiSize };

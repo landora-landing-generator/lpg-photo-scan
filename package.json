@@ -54,7 +54,7 @@
           ]
         }
       ],
-      "identity": "-",
+      "identity": null,
       "category": "public.app-category.utilities",
       "icon": "build/icon.png"
     },
@@ -95,6 +95,11 @@
       "createDesktopShortcut": "always",
       "shortcutName": "LPG Photo Scan"
     },
-    "publish": null
+    "publish": null,
+    "afterPack": "build/adhoc-sign.cjs",
+    "copyright": "© 2026 Андрей Цибин"
+  },
+  "author": {
+    "name": "Андрей Цибин"
   }
 }

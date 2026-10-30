@@ -62,9 +62,17 @@ function renderProvider() {
   $("key-hint").textContent = `Где взять: ${p.hint}. Цена: ${p.scanCost}${p.canDraw ? `, новый кадр ${p.drawCost}` : ""}.${
     p.canDraw ? "" : " Этот сервис только ищет людей — рисовать новые кадры он не умеет."
   }`;
-  $("recognize-model").placeholder = `по умолчанию ${p.visionModel}`;
-  $("draw-model").placeholder = p.canDraw ? `по умолчанию ${p.drawModel}` : "этот сервис не рисует";
+  // Fields show the model in force: the service's default unless the user typed another.
+  const prev = providerById(keys.shown);
+  const fillModel = (id, def, prevDef) => {
+    const v = $(id).value.trim();
+    if (!v || v === prevDef) $(id).value = def ?? "";
+  };
+  fillModel("recognize-model", p.visionModel, prev?.visionModel);
+  fillModel("draw-model", p.drawModel, prev?.drawModel);
+  $("draw-model").placeholder = p.canDraw ? "" : "этот сервис не рисует";
   $("draw-model").disabled = !p.canDraw;
+  keys.shown = p.id;
 }
 
 /** Folded card title: which service, and whether its key works. */
@@ -101,7 +109,11 @@ $("key-save").addEventListener("click", async () => {
   const res = await ipc.saveSettings({
     provider,
     key,
-    models: { recognize: $("recognize-model").value, draw: $("draw-model").value },
+    // A default model is stored as "default", so a later app update can move it.
+    models: {
+      recognize: $("recognize-model").value.trim() === providerById(provider).visionModel ? "" : $("recognize-model").value,
+      draw: $("draw-model").value.trim() === providerById(provider).drawModel ? "" : $("draw-model").value,
+    },
     // The default text is stored as "use the default", so it follows app updates.
     redrawRules: rules === keys.defaultRules ? "" : rules,
   });
@@ -380,8 +392,8 @@ function render() {
           note ? el("div", { class: "note" }, note) : null,
         ),
         el("td", {}, el("span", { class: `tag ${v}` }, VERDICT[v])),
-        el("td", { class: "n" }, r ? String(r.people.length) : ""),
-        el("td", { class: "n" }, r ? String(r.unsure.length) : ""),
+        el("td", { class: "n" }, r && !r.error ? String(r.people.length) : ""),
+        el("td", { class: "n" }, r && !r.error ? String(r.unsure.length) : ""),
         el("td", { class: "n" }, r ? String(imagesOf(r).filter((i) => i.redraw).length || "") : ""),
         el("td", { class: "n" }, r && !r.error ? String(r.images) : ""),
       ),
@@ -504,6 +516,74 @@ $("viewer-save").addEventListener("click", async () => {
   else if (res.saved) setStatus("viewer-status", `Сохранено: ${res.filePath}`, "ok");
 });
 
+// ---------- studio: own picture as a reference, or words only ----------
+
+const studio = { refId: null, file: null };
+
+function setReference(res) {
+  if (!res || res.canceled) return;
+  if (res.error) {
+    setStatus("studio-status", res.error, "bad");
+    return;
+  }
+  studio.refId = res.id;
+  $("studio-ref").src = res.preview;
+  $("studio-drop-text").hidden = true;
+  $("studio-clear").hidden = false;
+  $("studio-aspect").disabled = true;
+  $("studio-aspect").title = "Размер — как у образца";
+  setStatus("studio-status", `Образец ${res.width}×${res.height}. Новый кадр будет того же размера.`);
+}
+
+$("studio-drop").addEventListener("click", async () => setReference(await ipc.studioReference()));
+$("studio-drop").addEventListener("keydown", async (e) => {
+  if (e.key === "Enter" || e.key === " ") setReference(await ipc.studioReference());
+});
+$("studio-drop").addEventListener("dragover", (e) => {
+  e.preventDefault();
+  $("studio-drop").classList.add("drop");
+});
+$("studio-drop").addEventListener("dragleave", () => $("studio-drop").classList.remove("drop"));
+$("studio-drop").addEventListener("drop", async (e) => {
+  e.preventDefault();
+  $("studio-drop").classList.remove("drop");
+  const file = e.dataTransfer?.files?.[0];
+  if (file) setReference(await ipc.studioDroppedReference(file));
+});
+$("studio-clear").addEventListener("click", () => {
+  studio.refId = null;
+  $("studio-ref").removeAttribute("src");
+  $("studio-drop-text").hidden = false;
+  $("studio-clear").hidden = true;
+  $("studio-aspect").disabled = false;
+  $("studio-aspect").title = "";
+  setStatus("studio-status", "");
+});
+
+$("studio-go").addEventListener("click", async () => {
+  $("studio-go").disabled = true;
+  setStatus("studio-status", "Рисую… обычно 10–40 секунд.");
+  const res = await ipc.studioGenerate({ refId: studio.refId, prompt: $("studio-prompt").value, aspect: $("studio-aspect").value });
+  $("studio-go").disabled = false;
+  if (res.error) {
+    setStatus("studio-status", res.error, "bad");
+    return;
+  }
+  studio.file = res.file;
+  $("studio-out").src = res.preview;
+  $("studio-meta").textContent = `${res.width}×${res.height}, ${kb(res.bytes)}, JPEG для сайта`;
+  $("studio-result").hidden = false;
+  $("studio-go").textContent = "Нарисовать ещё";
+  setStatus("studio-status", "Готово.", "ok");
+});
+
+$("studio-save").addEventListener("click", async () => {
+  if (!studio.file) return;
+  const res = await ipc.studioSave(studio.file);
+  if (res.error) setStatus("studio-status", res.error, "bad");
+  else if (res.saved) setStatus("studio-status", `Сохранено: ${res.filePath}`, "ok");
+});
+
 // ---------- theme: auto (system), light, dark; remembered per computer ----------
 
 function applyTheme(choice) {
@@ -568,6 +648,7 @@ $("update-open").addEventListener("click", () => updateUrl && ipc.openExternal(u
   $("key").value = s.settings.keys[s.settings.provider] ?? "";
   $("recognize-model").value = s.settings.models.recognize;
   $("draw-model").value = s.settings.models.draw;
+  keys.shown = s.settings.provider;
   $("redraw-rules").value = s.settings.redrawRules || s.defaultRedrawRules;
   renderProvider();
   renderKeySummary($("key").value ? true : undefined);
