@@ -100,22 +100,24 @@ async function drawOpenAi(p, model, apiKey, prompt, size, signal, reference) {
 /** polza.ai: Media API is asynchronous — create, then poll until completed. */
 async function drawPolza(p, model, apiKey, prompt, size, signal, reference) {
   const headers = { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
-  const res = await fetch(`${p.base}/media`, {
-    method: "POST",
-    signal,
-    headers,
-    body: JSON.stringify({
-      model,
-      input: {
-        prompt,
-        aspect_ratio: aspectRatioFor(size.width, size.height),
-        image_resolution: tierFor(model, size.width, size.height),
-        output_format: "jpeg",
-        ...(reference ? { images: [{ type: "base64", data: dataUrl(reference) }] } : {}),
-      },
-    }),
-  });
-  let body = await res.text();
+  // Optional knobs differ per model; polza answers 400 "не поддерживает параметр X"
+  // for the ones a model lacks — drop that one and ask again.
+  const input = {
+    prompt,
+    aspect_ratio: aspectRatioFor(size.width, size.height),
+    image_resolution: tierFor(model, size.width, size.height),
+    ...(reference ? { images: [{ type: "base64", data: dataUrl(reference) }] } : {}),
+  };
+  const OPTIONAL = ["image_resolution", "aspect_ratio"];
+  let res;
+  let body;
+  for (;;) {
+    res = await fetch(`${p.base}/media`, { method: "POST", signal, headers, body: JSON.stringify({ model, input }) });
+    body = await res.text();
+    const unsupported = res.status === 400 ? OPTIONAL.find((k) => k in input && body.includes(k)) : null;
+    if (!unsupported) break;
+    delete input[unsupported];
+  }
   if (!res.ok) throw httpError(p, res.status, body);
   let job = JSON.parse(body);
   const started = Date.now();
