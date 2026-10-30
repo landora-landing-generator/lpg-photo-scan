@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Поиск людей на сайтах — установка</title>
+    <link rel="icon" href="icon.png" />
+    <style>
+      :root {
+        --bg: #f6f7f9; --card: #fff; --text: #1c2430; --muted: #6b7686; --line: #e3e7ed;
+        --accent: #2563eb; --note: #fdf3c4;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root { --bg: #14171c; --card: #1c2027; --text: #e6e9ee; --muted: #98a2b1; --line: #2d333d; --accent: #3b82f6; --note: #3d3416; }
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+      main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+      header { display: flex; gap: 16px; align-items: center; margin-bottom: 8px; }
+      header img { width: 64px; height: 64px; }
+      h1 { font-size: 26px; margin: 0; }
+      h2 { font-size: 20px; margin: 0 0 8px; }
+      .muted { color: var(--muted); }
+      .tabs { display: flex; gap: 8px; margin: 24px 0 0; flex-wrap: wrap; }
+      .tabs button { font: inherit; padding: 8px 16px; border-radius: 8px 8px 0 0; border: 1px solid var(--line); border-bottom: none; background: transparent; color: var(--text); cursor: pointer; }
+      .tabs button[aria-selected="true"] { background: var(--card); font-weight: 600; }
+      .panel { background: var(--card); border: 1px solid var(--line); border-radius: 0 10px 10px 10px; padding: 20px 22px; }
+      .panel[hidden] { display: none; }
+      .dl { display: flex; gap: 10px; flex-wrap: wrap; margin: 8px 0 16px; }
+      .dl a { display: inline-block; padding: 10px 18px; border-radius: 8px; background: var(--accent); color: #fff; text-decoration: none; font-weight: 600; }
+      .dl a.alt { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+      ol { padding-left: 22px; } li { margin: 6px 0; }
+      .note { background: var(--note); border-radius: 10px; padding: 12px 16px; margin: 16px 0; }
+      b.ui { font-weight: 600; white-space: nowrap; }
+      details { margin-top: 14px; } summary { cursor: pointer; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <img src="icon.png" alt="" />
+        <div>
+          <h1>Поиск людей на сайтах</h1>
+          <div class="muted">Вставляете список доменов — приложение показывает, на каких сайтах есть фотографии людей.</div>
+        </div>
+      </header>
+
+      <div class="note">
+        Приложение внутреннее и не подписано у Apple и Microsoft (подпись платная). Поэтому при первом запуске
+        система предупредит, что не знает его. Это ожидаемо — ниже написано, что нажать. Делается один раз.
+      </div>
+
+      <div class="tabs" role="tablist">
+        <button role="tab" id="tab-mac" aria-controls="mac">Mac</button>
+        <button role="tab" id="tab-win" aria-controls="win">Windows</button>
+      </div>
+
+      <section class="panel" id="mac" role="tabpanel" aria-labelledby="tab-mac">
+        <h2>Установка на Mac</h2>
+        <p class="muted">
+          Какой у вас Mac: меню  → «Об этом Mac». Если в строке «Чип» написано Apple M1, M2, M3, M4 и т. п. —
+          первая кнопка. Если «Процессор Intel» — вторая.
+        </p>
+        <div class="dl">
+          <a id="dl-mac-arm" href="#">Скачать для Mac с чипом Apple</a>
+          <a id="dl-mac-x64" class="alt" href="#">Скачать для Mac с Intel</a>
+        </div>
+        <ol>
+          <li>Откройте скачанный файл <code>lpg-photo-scan-mac-….dmg</code>.</li>
+          <li>В открывшемся окне перетащите значок приложения на папку <b class="ui">«Программы»</b>.</li>
+          <li>Откройте <b class="ui">Программы</b> и запустите <b class="ui">LPG Photo Scan</b> двойным кликом.</li>
+          <li>
+            Появится окно «Apple не может проверить, что приложение не содержит вредоносного ПО». Нажмите
+            <b class="ui">«Готово»</b> (не «Переместить в корзину»).
+          </li>
+          <li>
+            Откройте меню  → <b class="ui">Системные настройки</b> → <b class="ui">Конфиденциальность и безопасность</b>.
+            Прокрутите вниз до раздела «Безопасность».
+          </li>
+          <li>
+            Там будет строка «Использование LPG Photo Scan заблокировано…». Нажмите
+            <b class="ui">«Всё равно открыть»</b> и введите пароль от Mac.
+          </li>
+          <li>Приложение откроется. Дальше оно запускается обычным двойным кликом, без этих шагов.</li>
+        </ol>
+        <details>
+          <summary>Кнопки «Всё равно открыть» нет</summary>
+          <p>
+            Она появляется только после попытки запуска и исчезает примерно через час. Запустите приложение ещё
+            раз (шаг 3), нажмите «Готово» и сразу откройте настройки.
+          </p>
+          <p>
+            Правый клик → «Открыть», как раньше, на macOS 15 Sequoia и macOS 26 Tahoe больше не работает — только
+            через настройки.
+          </p>
+        </details>
+      </section>
+
+      <section class="panel" id="win" role="tabpanel" aria-labelledby="tab-win" hidden>
+        <h2>Установка на Windows</h2>
+        <div class="dl"><a id="dl-win" href="#">Скачать для Windows</a></div>
+        <ol>
+          <li>
+            Браузер может сказать, что файл скачивают редко. В Edge: <b class="ui">«…»</b> рядом с файлом →
+            <b class="ui">«Сохранить»</b> → <b class="ui">«Показать больше»</b> → <b class="ui">«Всё равно сохранить»</b>.
+            В Chrome: <b class="ui">«Сохранить»</b> / <b class="ui">«Всё равно скачать»</b>.
+          </li>
+          <li>Запустите скачанный <code>lpg-photo-scan-win-x64.exe</code>.</li>
+          <li>
+            Появится синее окно «Система Windows защитила ваш компьютер». Нажмите
+            <b class="ui">«Подробнее»</b>, затем <b class="ui">«Выполнить в любом случае»</b>.
+          </li>
+          <li>Установка пройдёт сама, на рабочем столе появится значок <b class="ui">LPG Photo Scan</b>.</li>
+        </ol>
+        <details>
+          <summary>Windows пишет «Интеллектуальное управление приложениями заблокировало…» и кнопки «всё равно» нет</summary>
+          <p>
+            Это защита Smart App Control — она бывает включена на компьютерах с недавно установленной Windows 11 и
+            не пропускает неподписанные программы совсем.
+          </p>
+          <ol>
+            <li>Пуск → <b class="ui">Безопасность Windows</b>.</li>
+            <li><b class="ui">Управление приложениями/браузером</b> → <b class="ui">Параметры интеллектуального управления приложениями</b>.</li>
+            <li>Выберите <b class="ui">«Выкл.»</b> и запустите установщик снова.</li>
+          </ol>
+          <p class="muted">
+            На свежих версиях Windows 11 её можно потом включить обратно в том же месте. Если переключатель серый
+            и не нажимается — напишите тому, кто прислал вам ссылку.
+          </p>
+        </details>
+      </section>
+
+      <h2 style="margin-top: 32px">Что понадобится</h2>
+      <p>
+        Ключ одного из сервисов — OpenRouter, polza.ai, OpenAI или Anthropic: им приложение распознаёт людей на
+        картинках. Проверка 100 сайтов стоит от 1–3 долларов (100–300 ₽ на polza.ai). Ключ вставляется в
+        приложении, оно же подскажет, если с ним что-то не так.
+      </p>
+      <h2 style="margin-top: 24px">Новая версия</h2>
+      <p>Когда она выйдет, приложение само покажет плашку со ссылкой сюда. Скачайте и установите поверх — результаты проверок сохранятся.</p>
+    </main>
+    <script>
+      const base = "https://github.com/landora-landing-generator/lpg-photo-scan/releases/latest/download/";
+      document.getElementById("dl-mac-arm").href = base + "lpg-photo-scan-mac-arm64.dmg";
+      document.getElementById("dl-mac-x64").href = base + "lpg-photo-scan-mac-x64.dmg";
+      document.getElementById("dl-win").href = base + "lpg-photo-scan-win-x64.exe";
+
+      const tabs = { mac: document.getElementById("tab-mac"), win: document.getElementById("tab-win") };
+      function show(os) {
+        for (const [key, tab] of Object.entries(tabs)) {
+          tab.setAttribute("aria-selected", String(key === os));
+          document.getElementById(key).hidden = key !== os;
+        }
+      }
+      tabs.mac.addEventListener("click", () => show("mac"));
+      tabs.win.addEventListener("click", () => show("win"));
+      show(/Mac/i.test(navigator.userAgent) ? "mac" : "win");
+    </script>
+  </body>
+</html>
