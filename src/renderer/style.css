@@ -487,4 +487,4 @@ table.results { width: 100%; border-collapse: collapse; }
 }
 .hint:empty { display: none; }
 
-select.draw-model { max-width: 300px; }
+input.draw-model { width: 260px; font-size: 13px; }

@@ -71,23 +71,40 @@ function renderProvider() {
   keys.shown = p.id;
 }
 
-/** Drawing model pickers in the viewer and the studio — one shared, remembered choice. */
+/**
+ * Drawing model fields in the viewer and the studio: one shared, remembered
+ * value. The service's models are suggestions; any model name can be typed.
+ */
 function renderDrawModels() {
   const p = providerById($("provider").value);
   if (!p) return;
-  const current = p.drawModels.some((m) => m.id === keys.settings.models.draw) ? keys.settings.models.draw : p.drawModel;
+  $("draw-models").replaceChildren(...p.drawModels.map((m) => el("option", { value: m.id }, m.label)));
+  const own = p.id === keys.savedProvider ? keys.settings.models.draw : "";
+  const current = own || p.drawModel;
   for (const id of ["viewer-model", "studio-model"]) {
-    $(id).replaceChildren(...p.drawModels.map((m) => el("option", { value: m.id, selected: m.id === current }, m.label)));
-    $(id).title = "Чем рисовать";
+    if (document.activeElement !== $(id)) $(id).value = current;
+    $(id).placeholder = p.drawModel;
   }
 }
 
+function commitDrawModel(id) {
+  const p = providerById($("provider").value);
+  const typed = $(id).value.trim();
+  // Empty or the default means "the service's default", so updates can move it.
+  const model = !typed || typed === p.drawModel ? "" : typed;
+  if (model === keys.settings.models.draw) return;
+  keys.settings.models.draw = model;
+  ipc.setDrawModel(model);
+  renderDrawModels();
+}
+
 for (const id of ["viewer-model", "studio-model"]) {
-  $(id).addEventListener("change", () => {
-    keys.settings.models.draw = $(id).value;
-    ipc.setDrawModel($(id).value);
-    renderDrawModels();
+  $(id).addEventListener("change", () => commitDrawModel(id));
+  $(id).addEventListener("keydown", (e) => {
+    if (e.key === "Enter") $(id).blur();
   });
+  // A click shows every suggestion, not only the ones matching the current text.
+  $(id).addEventListener("focus", () => $(id).select());
 }
 
 /** Folded card title: which service, and whether its key works. */
@@ -127,9 +144,7 @@ $("key-save").addEventListener("click", async () => {
     // A default model is stored as "default", so a later app update can move it.
     models: {
       recognize: $("recognize-model").value.trim() === providerById(provider).visionModel ? "" : $("recognize-model").value,
-      draw: keys.settings.models.draw && providerById(provider).drawModels.some((m) => m.id === keys.settings.models.draw)
-        ? keys.settings.models.draw
-        : "",
+      draw: provider === keys.savedProvider ? keys.settings.models.draw : "",
     },
     // The default text is stored as "use the default", so it follows app updates.
     redrawRules: rules === keys.defaultRules ? "" : rules,
@@ -139,6 +154,9 @@ $("key-save").addEventListener("click", async () => {
     return;
   }
   keys.settings.keys[provider] = key;
+  if (provider !== keys.savedProvider) keys.settings.models.draw = "";
+  keys.savedProvider = provider;
+  renderDrawModels();
   setStatus("key-status", res.ok ? `Ключ ${res.message}.` : `Ключ ${res.message}.`, res.ok ? "ok" : "bad");
   renderKeySummary(res.ok);
   if (res.ok) setTimeout(() => ($("key-card").open = false), 900);
@@ -690,6 +708,7 @@ $("update-open").addEventListener("click", () => updateUrl && ipc.openExternal(u
   $("key").value = s.settings.keys[s.settings.provider] ?? "";
   $("recognize-model").value = s.settings.models.recognize;
   keys.shown = s.settings.provider;
+  keys.savedProvider = s.settings.provider;
   $("redraw-rules").value = s.settings.redrawRules || s.defaultRedrawRules;
   renderProvider();
   renderKeySummary($("key").value ? true : undefined);

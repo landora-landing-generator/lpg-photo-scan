@@ -140,7 +140,8 @@
                   <option value="3:4">Вертикальный 3:4</option>
                   <option value="9:16">Вертикальный 9:16</option>
                 </select>
-                <select id="studio-model" class="draw-model" aria-label="Модель рисования"></select>
+                <label for="studio-model" class="hint">Модель</label>
+            <input id="studio-model" class="draw-model" type="text" list="draw-models" spellcheck="false" aria-label="Модель рисования" title="Модель рисования: выберите из списка или впишите свою" />
                 <button id="studio-clear" hidden>Убрать образец</button>
                 <button id="studio-go" class="primary push-right">Нарисовать</button>
               </div>
@@ -190,7 +191,8 @@
         <div class="row between">
           <span id="viewer-status" class="status"></span>
           <div class="row push-right">
-            <select id="viewer-model" class="draw-model" aria-label="Модель рисования"></select>
+            <label for="viewer-model" class="hint">Модель</label>
+            <input id="viewer-model" class="draw-model" type="text" list="draw-models" spellcheck="false" aria-label="Модель рисования" title="Модель рисования: выберите из списка или впишите свою" />
             <button id="viewer-save">Скачать на компьютер</button>
             <button id="viewer-redraw" class="primary">Перерисовать</button>
           </div>
@@ -222,6 +224,7 @@
         <ul>
           <li>Новый кадр — того же размера, что старый, уже сжат для сайта.</li>
           <li>«Скачать новые кадры в папку» кладёт рядом файл replacements.csv — что на что менять.</li>
+          <li>Модель рисования меняется прямо в окне: выберите из списка или впишите свою.</li>
           <li>Всё сохраняется само — приложение можно закрыть.</li>
         </ul>
         <h3>Нарисовать кадр</h3>
@@ -232,6 +235,8 @@
         <p class="hint">Разработчик — Андрей Цибин.</p>
       </div>
     </div>
+
+    <datalist id="draw-models"></datalist>
 
     <script src="app.js"></script>
   </body>

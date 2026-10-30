@@ -139,7 +139,7 @@ ipcMain.handle("settings:draw-model", (_e, model) => {
   saveSettings({
     provider: s.provider,
     key: s.keys[s.provider] ?? "",
-    models: { ...s.models, draw: model === providerList().find((p) => p.id === s.provider)?.drawModel ? "" : model },
+    models: { ...s.models, draw: String(model ?? "").trim() },
     redrawRules: s.redrawRules,
   });
 });
