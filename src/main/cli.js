@@ -31,7 +31,7 @@ app.whenReady().then(async () => {
             error: r.error,
             pages: r.pages,
             images: r.images,
-            people: r.people.map((p) => p.url),
+            people: r.people.map((p) => `${p.kind}: ${p.url.split("/").pop()}`),
             unsure: r.unsure.map((p) => p.url),
             unchecked: r.unchecked,
           }),

@@ -254,7 +254,7 @@ async function scanSites({ hosts, creds, signal, onSite, onProgress, siteConcurr
                 bytes: prepared.bytes,
                 format: prepared.format,
               };
-              if (kind === "people") result.people.push(entry);
+              if (kind === "face" || kind === "body") result.people.push({ ...entry, kind });
               else if (kind === "unsure") result.unsure.push(entry);
             } catch (e) {
               if (e instanceof FatalKeyError) {

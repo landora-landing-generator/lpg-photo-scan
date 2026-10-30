@@ -350,12 +350,13 @@ table.results { width: 100%; border-collapse: collapse; }
   font-weight: 600;
   white-space: nowrap;
 }
+.tag.faces, .chip.faces { background: var(--people); color: #fff; }
 .tag.people, .chip.people { background: var(--people-bg); color: var(--people); }
 .tag.unsure, .chip.unsure { background: var(--unsure-bg); color: var(--unsure); }
 .tag.clean, .chip.clean { background: var(--clean-bg); color: var(--clean); }
 .tag.error, .chip.error { background: var(--error-bg); color: var(--error); }
 .tag.none, .chip.none { background: transparent; color: var(--muted); border: 1px dashed var(--line-strong); }
-.v-people { color: var(--people); }
+.v-faces, .v-people { color: var(--people); }
 .v-unsure { color: var(--unsure); }
 .v-clean { color: var(--clean); }
 .v-error { color: var(--error); }

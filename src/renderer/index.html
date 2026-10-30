@@ -72,7 +72,7 @@
           <span id="domains-count" class="fold-note">0 доменов</span>
         </summary>
         <div class="fold-body">
-          <textarea id="domains" rows="5" spellcheck="false" placeholder="Перетащите сюда файл Excel, CSV или TXT — или вставьте домены, по одному в строке"></textarea>
+          <textarea id="domains" rows="5" spellcheck="false" placeholder="Перетащите сюда файл Excel (.xlsx, .xls), .ods, .csv или .txt — или вставьте домены, по одному в строке"></textarea>
           <div class="row between">
             <button id="domains-import">Загрузить из файла…</button>
             <div class="row">
@@ -107,7 +107,8 @@
             <tr>
               <th>Сайт</th>
               <th>Итог</th>
-              <th class="n">С людьми</th>
+              <th class="n">Лица</th>
+              <th class="n">Части</th>
               <th class="n">Глазами</th>
               <th class="n">Новых</th>
               <th class="n">Кадров</th>
@@ -209,13 +210,14 @@
         <h3>Как работать</h3>
         <ol>
           <li>Выберите сервис, вставьте ключ → «Сохранить».</li>
-          <li>Загрузите файл с сайтами (Excel, CSV, TXT) → «Проверить сайты».</li>
-          <li>Нажмите на сайт с отметкой «Есть люди» → на кадр → «Перерисовать».</li>
+          <li>Загрузите файл с сайтами (Excel .xlsx и .xls, .ods, .csv, .txt) → «Проверить сайты». Домены найдутся в любом столбце.</li>
+          <li>Нажмите на сайт с отметкой «Есть лица» → на кадр → «Перерисовать».</li>
           <li>«Скачать на компьютер» → загрузите файл на сайт вместо старого.</li>
         </ol>
         <h3>Итог</h3>
         <ul>
-          <li><b class="v-people">Есть люди</b> — нужно заменить кадры.</li>
+          <li><b class="v-faces">Есть лица</b> — человек узнаваем. Менять первыми.</li>
+          <li><b class="v-people">Части людей</b> — руки, фигура со спины. Стоковое фото тоже повод для иска.</li>
           <li><b class="v-unsure">Проверить глазами</b> — нейросеть не уверена, посмотрите сами.</li>
           <li><b class="v-clean">Людей нет</b> — ничего делать не нужно.</li>
           <li><b class="v-error">Сайт не открылся</b> — причина в строке.</li>

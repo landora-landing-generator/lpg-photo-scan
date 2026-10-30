@@ -1,10 +1,11 @@
 "use strict";
 
 const ExcelJS = require("exceljs");
-const { VERDICT_TEXT } = require("./verdict");
+const { VERDICT_TEXT, verdictOf, personKind, countKind } = require("./verdict");
 const { displayHost, displayUrl } = require("./domains");
 
 const FILL = {
+  faces: "FFFBD0C0",
   people: "FFFDE2C2",
   unsure: "FFFFF3B0",
   clean: "FFD9F2D9",
@@ -19,7 +20,8 @@ async function writeExcel(filePath, hosts, results) {
   sites.columns = [
     { header: "Домен", key: "host", width: 32 },
     { header: "Итог", key: "verdict", width: 20 },
-    { header: "Кадров с людьми", key: "people", width: 16 },
+    { header: "Кадров с лицами", key: "faces", width: 16 },
+    { header: "Части людей", key: "bodies", width: 14 },
     { header: "Проверить глазами", key: "unsure", width: 18 },
     { header: "Кадров проверено", key: "images", width: 16 },
     { header: "Страниц", key: "pages", width: 10 },
@@ -32,8 +34,9 @@ async function writeExcel(filePath, hosts, results) {
       r
         ? {
             host: displayHost(host),
-            verdict: VERDICT_TEXT[r.verdict],
-            people: r.people.length,
+            verdict: VERDICT_TEXT[verdictOf(r)],
+            faces: countKind(r, "face"),
+            bodies: countKind(r, "body"),
             unsure: r.unsure.length,
             images: r.images,
             pages: r.pages,
@@ -42,11 +45,11 @@ async function writeExcel(filePath, hosts, results) {
           }
         : { host: displayHost(host), verdict: "Не проверен" },
     );
-    if (r) row.getCell("verdict").fill = { type: "pattern", pattern: "solid", fgColor: { argb: FILL[r.verdict] } };
+    if (r) row.getCell("verdict").fill = { type: "pattern", pattern: "solid", fgColor: { argb: FILL[verdictOf(r)] } };
     row.getCell("checkedAt").numFmt = "dd.mm.yyyy hh:mm";
   }
   sites.getRow(1).font = { bold: true };
-  sites.autoFilter = { from: "A1", to: "H1" };
+  sites.autoFilter = { from: "A1", to: "I1" };
 
   const images = wb.addWorksheet("Кадры с людьми", { views: [{ state: "frozen", ySplit: 1 }] });
   images.columns = [
@@ -58,11 +61,12 @@ async function writeExcel(filePath, hosts, results) {
   for (const host of hosts) {
     const r = results[host];
     if (!r) continue;
-    for (const [list, kind] of [
-      [r.people, "Есть люди"],
-      [r.unsure, "Проверить глазами"],
+    for (const [list, kindOf] of [
+      [r.people, (img) => (personKind(img) === "face" ? "Лицо" : "Часть человека")],
+      [r.unsure, () => "Проверить глазами"],
     ]) {
       for (const img of list) {
+        const kind = kindOf(img);
         const row = images.addRow({ host: displayHost(host), kind, page: displayUrl(img.page), url: img.url });
         row.getCell("url").value = { text: img.url, hyperlink: img.url };
         row.getCell("url").font = { color: { argb: "FF1A56DB" }, underline: true };

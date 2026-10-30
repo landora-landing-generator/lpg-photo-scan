@@ -4,7 +4,8 @@ const $ = (id) => document.getElementById(id);
 const ipc = window.api;
 
 const VERDICT = {
-  people: "Есть люди",
+  faces: "Есть лица",
+  people: "Части людей",
   unsure: "Проверить глазами",
   clean: "Людей нет",
   error: "Сайт не открылся",
@@ -58,7 +59,16 @@ async function learnUrls(urls) {
 const prettyUrl = (u) => shownUrl.get(u) ?? u;
 
 const labelOf = (host) => state.hosts.find((h) => h.host === host)?.label ?? host;
-const verdictOf = (host) => state.results[host]?.verdict ?? "none";
+/** Same rule as the main process (verdict.js): kept here so old saved results read the new way. */
+const isFace = (img) => img.kind !== "body";
+function verdictOfResult(r) {
+  if (r.error) return "error";
+  if (r.people.some(isFace)) return "faces";
+  if (r.people.length) return "people";
+  if (r.unsure.length || r.unchecked) return "unsure";
+  return "clean";
+}
+const verdictOf = (host) => (state.results[host] ? verdictOfResult(state.results[host]) : "none");
 const imagesOf = (r) => [...(r?.people ?? []), ...(r?.unsure ?? [])];
 
 // ---------- key: one service, one key ----------
@@ -318,7 +328,7 @@ ipc.onRedrawProgress((p) => {
 });
 
 function renderChips() {
-  const counts = { people: 0, unsure: 0, clean: 0, error: 0, none: 0 };
+  const counts = { faces: 0, people: 0, unsure: 0, clean: 0, error: 0, none: 0 };
   for (const { host } of state.hosts) counts[verdictOf(host)]++;
   $("chips").replaceChildren(
     ...Object.entries(counts)
@@ -381,7 +391,8 @@ function siteActions(host, r) {
 function thumbGrid(host, r) {
   const grid = el("div", { class: "thumbs" });
   for (const [list, label] of [
-    [r.people, "Кадры с людьми"],
+    [r.people.filter(isFace), "Лица"],
+    [r.people.filter((img) => !isFace(img)), "Части людей — руки, фигура со спины"],
     [r.unsure, "Нейросеть не уверена — посмотрите сами"],
   ]) {
     if (!list.length) continue;
@@ -437,13 +448,14 @@ function render() {
           note ? el("div", { class: "note" }, note) : null,
         ),
         el("td", {}, el("span", { class: `tag ${v}` }, VERDICT[v])),
-        el("td", { class: "n" }, r && !r.error ? String(r.people.length) : ""),
+        el("td", { class: "n" }, r && !r.error ? String(r.people.filter(isFace).length) : ""),
+        el("td", { class: "n" }, r && !r.error ? String(r.people.filter((img) => !isFace(img)).length) : ""),
         el("td", { class: "n" }, r && !r.error ? String(r.unsure.length) : ""),
         el("td", { class: "n" }, r ? String(imagesOf(r).filter((i) => i.redraw).length || "") : ""),
         el("td", { class: "n" }, r && !r.error ? String(r.images) : ""),
       ),
     );
-    if (isOpen) rows.push(el("tr", { class: "details" }, el("td", { colspan: "6" }, thumbGrid(host, r))));
+    if (isOpen) rows.push(el("tr", { class: "details" }, el("td", { colspan: "7" }, thumbGrid(host, r))));
   }
   $("rows").replaceChildren(...rows);
   $("empty").hidden = rows.length > 0;

@@ -7,8 +7,10 @@ const { FatalKeyError, providerOf, httpError } = require("./providers");
 
 const CLASSIFY = [
   "You see one image taken from a commercial website. Classify it with ONE word:",
-  "people — a PHOTOGRAPH (or photorealistic image) where a real person or a recognisable part of one",
-  "(face, figure, hands at work) is visible, even small, in the background, or inside a collage or screenshot;",
+  "face — a PHOTOGRAPH (or photorealistic image) with a real human face you could recognise:",
+  "front or side view, even small, in the background, or inside a collage or screenshot;",
+  "body — a photograph with a person but no recognisable face: hands at work, a figure from behind,",
+  "a silhouette, a body cropped above or below the face, a face fully hidden;",
   "photo — any other photograph (equipment, interior, object, landscape) with no person in it;",
   "graphic — logo, icon, drawing, cartoon, illustration, map, diagram, pattern, banner made mostly of text;",
   "unsure — you cannot tell.",
@@ -26,12 +28,13 @@ const describeInstruction = (rules) =>
     "Answer with the prompt text only — no quotes, no headings, no explanations.",
   ].join("\n");
 
-const KINDS = ["people", "photo", "graphic", "unsure"];
+const KINDS = ["face", "body", "photo", "graphic", "unsure"];
 
-/** First known word in the answer wins; anything else is "unsure". */
+/** First known word in the answer wins ("people" counts as a face); anything else is "unsure". */
 function parseKind(text) {
   const words = String(text).toLowerCase().match(/[a-z]+/g) ?? [];
-  return words.find((w) => KINDS.includes(w)) ?? "unsure";
+  const word = words.find((w) => KINDS.includes(w) || w === "people");
+  return word === "people" ? "face" : (word ?? "unsure");
 }
 
 /** A described prompt, cleaned of quotes or a "Prompt:" label some models add. */
@@ -89,7 +92,7 @@ async function askVision({ provider, apiKey, model }, jpeg, instruction, maxToke
   throw lastError;
 }
 
-/** people / photo / graphic / unsure for one image. */
+/** face / body / photo / graphic / unsure for one image. */
 async function classify(creds, jpeg, { signal } = {}) {
   return parseKind(await askVision(creds, jpeg, CLASSIFY, 16, signal));
 }

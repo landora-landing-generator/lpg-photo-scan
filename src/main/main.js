@@ -158,7 +158,7 @@ ipcMain.handle(
         title: "Файл со списком сайтов",
         properties: ["openFile", "multiSelections"],
         filters: [
-          { name: "Excel, CSV, текст", extensions: ["xlsx", "xlsm", "csv", "tsv", "txt"] },
+          { name: "Excel, CSV, текст", extensions: ["xlsx", "xlsm", "xls", "ods", "csv", "tsv", "txt"] },
           { name: "Все файлы", extensions: ["*"] },
         ],
       });

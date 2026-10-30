@@ -52,9 +52,11 @@ describe("image keys", () => {
 
 describe("verdict", () => {
   const base = { people: [], unsure: [], unchecked: 0, error: null };
-  it("orders error > people > unsure > clean", () => {
+  it("orders error > faces > people > unsure > clean", () => {
     expect(verdictOf({ ...base, error: "x", people: [{}] })).toBe("error");
-    expect(verdictOf({ ...base, people: [{}], unsure: [{}] })).toBe("people");
+    expect(verdictOf({ ...base, people: [{ kind: "body" }, { kind: "face" }] })).toBe("faces");
+    expect(verdictOf({ ...base, people: [{}] })).toBe("faces"); // results saved before kinds
+    expect(verdictOf({ ...base, people: [{ kind: "body" }], unsure: [{}] })).toBe("people");
     expect(verdictOf({ ...base, unchecked: 1 })).toBe("unsure");
     expect(verdictOf(base)).toBe("clean");
   });
@@ -62,7 +64,9 @@ describe("verdict", () => {
 
 describe("model answer", () => {
   it("reads one word, tolerates noise, falls back to unsure", () => {
-    expect(parseKind("people")).toBe("people");
+    expect(parseKind("face")).toBe("face");
+    expect(parseKind("Body.")).toBe("body");
+    expect(parseKind("people")).toBe("face");
     expect(parseKind("Photo.")).toBe("photo");
     expect(parseKind('{"kind":"graphic"}')).toBe("graphic");
     expect(parseKind("cat")).toBe("unsure");
