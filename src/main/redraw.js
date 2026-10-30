@@ -50,7 +50,8 @@ function redrawPreview(host, id) {
  * (unless the user gave one), the drawing service draws, sharp turns it into a
  * web-ready JPEG of the original's size. Keeps only the latest variant.
  */
-async function redrawImage(host, id, { prompt, signal } = {}) {
+async function redrawImage(host, id, { prompt, signal, onStep = () => {} } = {}) {
+  onStep("Скачиваю кадр с сайта…");
   const { img, buf } = await original(host, id, signal);
   const draw = credsFor("draw");
   if (!draw.apiKey) throw new Error("Сначала вставьте ключ и нажмите «Сохранить».");
@@ -65,10 +66,13 @@ async function redrawImage(host, id, { prompt, signal } = {}) {
       .resize(VISION_SIDE, VISION_SIDE, { fit: "inside", withoutEnlargement: true })
       .jpeg({ quality: 80 })
       .toBuffer();
+    onStep("Описываю кадр…");
     text = await describeForRedraw(recognize, small, rules, { signal });
   }
+  onStep("Рисую новый кадр… обычно 20–60 секунд");
   // The rules ride along with every prompt — also with one the user typed.
   const drawn = await drawImage(draw, `${text}\n\n${rules}`, { width: img.width, height: img.height }, { signal });
+  onStep("Сжимаю для сайта…");
   const web = await toWebJpeg(drawn, img);
   fs.mkdirSync(redrawDir(host), { recursive: true });
   const file = `${id}.jpg`;

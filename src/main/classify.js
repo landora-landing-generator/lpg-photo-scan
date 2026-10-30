@@ -82,7 +82,8 @@ async function askVision({ provider, apiKey, model }, jpeg, instruction, maxToke
       return await askOpenAiCompatible(p, m, apiKey, jpeg, instruction, maxTokens, signal);
     } catch (e) {
       if (e instanceof FatalKeyError || signal?.aborted) throw e;
-      lastError = e.name === "TimeoutError" ? new Error(`${p.label} не ответил за минуту`) : e;
+      if (e.name === "TimeoutError") throw new Error(`${p.label} не ответил за минуту`);
+      lastError = e;
     }
   }
   throw lastError;

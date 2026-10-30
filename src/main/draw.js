@@ -49,7 +49,7 @@ const dataUrl = (jpeg) => `data:image/jpeg;base64,${jpeg.toString("base64")}`;
 async function drawOpenRouter(p, model, apiKey, prompt, size, signal, reference) {
   const res = await fetch(`${p.base}/images`, {
     method: "POST",
-    signal,
+    signal: AbortSignal.any([AbortSignal.timeout(150_000), ...(signal ? [signal] : [])]),
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model,
@@ -97,7 +97,30 @@ async function drawOpenAi(p, model, apiKey, prompt, size, signal, reference) {
   return Buffer.from(b64, "base64");
 }
 
-/** polza.ai: Media API is asynchronous — create, then poll until completed. */
+/** Per-call limit: one hung HTTP call must not eat the whole job's time. */
+const CALL_TIMEOUT = 60_000;
+const callSignal = (signal) => AbortSignal.any([AbortSignal.timeout(CALL_TIMEOUT), ...(signal ? [signal] : [])]);
+
+/**
+ * The finished picture in a polza.ai answer. The docs name it differently per
+ * page (`data.url`, `data[0].url`, `output.url`), so look in every place.
+ */
+function polzaResult(job) {
+  for (const src of [job.data, job.output, job.result]) {
+    const item = Array.isArray(src) ? src[0] : src;
+    if (!item) continue;
+    if (typeof item === "string" && /^https?:/.test(item)) return { url: item };
+    if (item.url) return { url: item.url };
+    if (Array.isArray(item.images) && item.images[0]) return polzaResult({ data: item.images[0] });
+    if (item.b64_json) return { b64: item.b64_json };
+  }
+  return null;
+}
+
+/**
+ * polza.ai Media API: create the job in async mode (the default sync mode holds
+ * the connection until the frame is drawn), then poll its status.
+ */
 async function drawPolza(p, model, apiKey, prompt, size, signal, reference) {
   const headers = { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
   // Optional knobs differ per model; polza answers 400 "не поддерживает параметр X"
@@ -108,11 +131,17 @@ async function drawPolza(p, model, apiKey, prompt, size, signal, reference) {
     image_resolution: tierFor(model, size.width, size.height),
     ...(reference ? { images: [{ type: "base64", data: dataUrl(reference) }] } : {}),
   };
+  if (!input.image_resolution) delete input.image_resolution;
   const OPTIONAL = ["image_resolution", "aspect_ratio"];
   let res;
   let body;
   for (;;) {
-    res = await fetch(`${p.base}/media`, { method: "POST", signal, headers, body: JSON.stringify({ model, input }) });
+    res = await fetch(`${p.base}/media`, {
+      method: "POST",
+      signal: callSignal(signal),
+      headers,
+      body: JSON.stringify({ model, input, async: true }),
+    });
     body = await res.text();
     const unsupported = res.status === 400 ? OPTIONAL.find((k) => k in input && body.includes(k)) : null;
     if (!unsupported) break;
@@ -120,24 +149,22 @@ async function drawPolza(p, model, apiKey, prompt, size, signal, reference) {
   }
   if (!res.ok) throw httpError(p, res.status, body);
   let job = JSON.parse(body);
-  const started = Date.now();
   while (job.status !== "completed") {
     if (job.status === "failed" || job.status === "cancelled") {
       const why = job.error?.message ?? job.error ?? "без объяснения";
       throw new Error(`polza.ai не нарисовал кадр: ${typeof why === "string" ? why : JSON.stringify(why)}`);
     }
-    if (Date.now() - started > 300_000) throw new Error("polza.ai рисует дольше 5 минут — попробуйте позже");
     await new Promise((r) => setTimeout(r, 3000));
     signal?.throwIfAborted();
-    const poll = await fetch(`${p.base}/media/${encodeURIComponent(job.id)}`, { headers, signal });
+    const poll = await fetch(`${p.base}/media/${encodeURIComponent(job.id)}`, { headers, signal: callSignal(signal) });
     body = await poll.text();
     if (!poll.ok) throw httpError(p, poll.status, body);
     job = JSON.parse(body);
   }
-  const data = Array.isArray(job.data) ? job.data[0] : job.data;
-  if (data?.url) return fetchBytes(data.url, signal);
-  if (data?.b64_json) return Buffer.from(data.b64_json, "base64");
-  throw new Error("polza.ai не прислал картинку");
+  const result = polzaResult(job);
+  if (result?.url) return fetchBytes(result.url, callSignal(signal));
+  if (result?.b64) return Buffer.from(result.b64, "base64");
+  throw new Error(`polza.ai не прислал картинку: ${body.slice(0, 200)}`);
 }
 
 /**
@@ -152,4 +179,4 @@ async function drawImage({ provider, apiKey, model }, prompt, size, { signal, re
   return drawPolza(p, m, apiKey, prompt, size, signal, reference);
 }
 
-module.exports = { drawImage, aspectRatioFor, openAiSize };
+module.exports = { drawImage, aspectRatioFor, openAiSize, polzaResult };

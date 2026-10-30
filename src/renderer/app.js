@@ -559,6 +559,10 @@ $("viewer-redraw").addEventListener("click", async () => {
   setStatus("viewer-status", "Готово. Не нравится — поправьте описание и перерисуйте.", "ok");
 });
 
+ipc.onImageStep(({ id, step }) => {
+  if (viewer.busy && viewer.id === id) $("viewer-new-wait").textContent = `${step} Можно отменить или закрыть окно.`;
+});
+
 $("viewer-save").addEventListener("click", async () => {
   const res = await ipc.saveImage(viewer.host, viewer.id);
   if (res.error) setStatus("viewer-status", res.error, "bad");

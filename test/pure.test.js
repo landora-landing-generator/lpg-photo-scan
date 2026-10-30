@@ -3,7 +3,7 @@ import { parseDomains, normalizeHost, sameSite, displayHost } from "../src/main/
 import { imageKey, cssUrls } from "../src/main/image-urls.js";
 import { verdictOf } from "../src/main/verdict.js";
 import { parseKind, cleanPrompt } from "../src/main/classify.js";
-import { aspectRatioFor, openAiSize } from "../src/main/draw.js";
+import { aspectRatioFor, openAiSize, polzaResult } from "../src/main/draw.js";
 import { baseName } from "../src/main/redraw-names.js";
 import { newer } from "../src/main/update.js";
 
@@ -91,5 +91,15 @@ describe("export names", () => {
   it("keeps a Latin, OS-safe base name", () => {
     expect(baseName("https://site.ru/img/Фото%20мастер.PNG")).toBe("image");
     expect(baseName("https://site.ru/img/team_photo-1.webp?x=1")).toBe("team_photo-1");
+  });
+});
+
+describe("polza.ai answer", () => {
+  it("finds the picture wherever the docs put it", () => {
+    expect(polzaResult({ data: { url: "https://x/a.jpg" } })).toEqual({ url: "https://x/a.jpg" });
+    expect(polzaResult({ data: [{ url: "https://x/b.jpg" }] })).toEqual({ url: "https://x/b.jpg" });
+    expect(polzaResult({ output: { url: "https://x/c.jpg" } })).toEqual({ url: "https://x/c.jpg" });
+    expect(polzaResult({ data: { images: [{ url: "https://x/d.jpg" }] } })).toEqual({ url: "https://x/d.jpg" });
+    expect(polzaResult({ status: "completed" })).toBeNull();
   });
 });

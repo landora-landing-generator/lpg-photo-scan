@@ -234,7 +234,7 @@ ipcMain.handle("image:original", guarded((_e, { host, id }) => originalPreview(h
 ipcMain.handle("image:redrawn", (_e, { host, id }) => redrawPreview(host, id));
 ipcMain.handle("image:redraw", (_e, { host, id, prompt }) =>
   cancellable("viewer", async (signal) => {
-    const img = await redrawImage(host, id, { prompt, signal });
+    const img = await redrawImage(host, id, { prompt, signal, onStep: (step) => send("image:step", { id, step }) });
     send("image:updated", { host, image: img });
     return { image: img, preview: redrawPreview(host, id) };
   }),

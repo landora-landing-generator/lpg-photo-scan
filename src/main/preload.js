@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld("api", {
   onSite: on("scan:site"),
   onEnd: on("scan:end"),
   onImageUpdated: on("image:updated"),
+  onImageStep: on("image:step"),
   onRedrawProgress: on("site:redraw-progress"),
   onUpdate: on("update:available"),
 });
