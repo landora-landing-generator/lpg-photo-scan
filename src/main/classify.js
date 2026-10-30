@@ -49,7 +49,13 @@ function cleanPrompt(text) {
 
 const REQUEST_TIMEOUT = 60_000;
 
-async function askOpenAiCompatible(p, model, apiKey, jpeg, instruction, maxTokens, signal) {
+/** Chat content: the instruction, then the JPEG. */
+const visionContent = (jpeg, instruction) => [
+  { type: "text", text: instruction },
+  { type: "image_url", image_url: { url: `data:image/jpeg;base64,${jpeg.toString("base64")}` } },
+];
+
+async function askOpenAiCompatible(p, model, apiKey, content, maxTokens, signal) {
   const res = await fetch(`${p.base}/chat/completions`, {
     method: "POST",
     signal: AbortSignal.any([AbortSignal.timeout(REQUEST_TIMEOUT), ...(signal ? [signal] : [])]),
@@ -58,31 +64,24 @@ async function askOpenAiCompatible(p, model, apiKey, jpeg, instruction, maxToken
       model,
       temperature: 0,
       max_tokens: maxTokens,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: instruction },
-            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${jpeg.toString("base64")}` } },
-          ],
-        },
-      ],
+      messages: [{ role: "user", content }],
     }),
   });
   const body = await res.text();
-  if (!res.ok) throw httpError(p, res.status, body);
+  if (!res.ok) throw Object.assign(httpError(p, res.status, body), { status: res.status });
   return JSON.parse(body).choices?.[0]?.message?.content ?? "";
 }
 
-/** One vision question about a JPEG; transient failures are retried twice. */
+/** One vision question about a JPEG; transient failures are retried, a rate limit waits longer. */
 async function askVision({ provider, apiKey, model }, jpeg, instruction, maxTokens, signal) {
   const p = providerOf(provider);
   const m = model || p.visionModel;
+  const content = visionContent(jpeg, instruction);
   let lastError;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt) await new Promise((r) => setTimeout(r, 1500 * attempt));
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, (lastError?.status === 429 ? 5000 : 1500) * attempt));
     try {
-      return await askOpenAiCompatible(p, m, apiKey, jpeg, instruction, maxTokens, signal);
+      return await askOpenAiCompatible(p, m, apiKey, content, maxTokens, signal);
     } catch (e) {
       if (e instanceof FatalKeyError || signal?.aborted) throw e;
       if (e.name === "TimeoutError") throw new Error(`${p.label} не ответил за минуту`);

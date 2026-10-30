@@ -25,14 +25,30 @@ function imageKey(rawUrl, baseUrl) {
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
   url.hash = "";
   const href = url.href;
-  if (SKIP_EXT.test(url.pathname)) return null;
+  if (SKIP_EXT.test(url.pathname) || TRACKER.test(url.hostname)) return null;
   const t = TILDA.exec(href);
   if (t) {
     const [, id, file] = t;
     return { key: `tilda:${id}/${file}`, download: `https://static.tildacdn.com/${id}/${file}` };
   }
-  return { key: href, download: href };
+  // Image CDNs wrap the original: shortpixel.ai/client/w_320/https://site.ru/a.jpg.
+  const inner = /^\/.*?\/(https?:\/\/?.+)$/.exec(url.pathname);
+  if (inner) {
+    const k = imageKey(inner[1].replace(/^(https?:)\/(?!\/)/, "$1//") + url.search, baseUrl);
+    if (k) return { key: k.key, download: href };
+  }
+  // WordPress and friends cut sizes as name-300x200.jpg; all of them are one photo.
+  const sized = SIZE_SUFFIX.test(url.pathname);
+  url.pathname = url.pathname.replace(SIZE_SUFFIX, "");
+  // ?v=3 on a file is a cache buster; image.php?id=5 is the image itself.
+  if (IMAGE_EXT.test(url.pathname)) url.search = "";
+  return { key: url.href, download: href, sized };
 }
+
+// Size cuts of one upload: photo-300x200.jpg, photo-560x0.webp, photo-scaled.jpg.
+const SIZE_SUFFIX = /-(?:\d{2,5}x\d{1,5}|scaled)(?=\.[a-z0-9]+$)/i;
+// Counter pixels and ad beacons — never a photo.
+const TRACKER = /(?:^|\.)(?:mc\.yandex\.ru|google-analytics\.com|googletagmanager\.com|facebook\.com|vk\.com|top-fwz1\.mail\.ru|counter\.yadro\.ru|doubleclick\.net)$/i;
 
 /** A URL found in a data-* attribute only counts when it looks like an image file. */
 function looksLikeImage(rawUrl) {

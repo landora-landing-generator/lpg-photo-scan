@@ -3,7 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const sharp = require("sharp");
-const { fetchImage } = require("./scanner");
+const { downloadImage } = require("./scanner");
 const { readImage } = require("./decode");
 const { describeForRedraw } = require("./classify");
 const { drawImage } = require("./draw");
@@ -17,7 +17,7 @@ const VISION_SIDE = 768;
 async function original(host, id, signal) {
   const img = findImage(loadState(), host, id);
   if (!img) throw new Error("кадр не найден — проверьте сайт заново");
-  const raw = await fetchImage(img.url, img.page, signal ?? new AbortController().signal);
+  const raw = await downloadImage(img.url, signal ?? new AbortController().signal);
   const read = await readImage(raw);
   if (!read) throw new Error("картинка на сайте больше не открывается");
   return { img, buf: read.buf };

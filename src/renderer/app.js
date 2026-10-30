@@ -18,6 +18,7 @@ const state = {
   filter: null, // verdict shown, null = all
   open: new Set(), // expanded rows
   working: new Map(), // host → current step
+  pending: new Set(), // hosts of the running scan not finished yet
   total: 0,
   doneNow: 0,
   redrawSite: null, // { host, done, total } while a site-wide redraw runs
@@ -70,6 +71,8 @@ function verdictOfResult(r) {
 }
 const verdictOf = (host) => (state.results[host] ? verdictOfResult(state.results[host]) : "none");
 const imagesOf = (r) => [...(r?.people ?? []), ...(r?.unsure ?? [])];
+/** A result worth one more try: the site did not open, or some frames were left unchecked. */
+const needsRetry = (r) => Boolean(r && (r.error || r.unchecked > 0));
 
 // ---------- key: one service, one key ----------
 
@@ -264,30 +267,45 @@ function setRunning(on) {
 function renderProgress() {
   const pct = state.total ? Math.round((state.doneNow / state.total) * 100) : 0;
   $("progress-fill").style.width = `${pct}%`;
-  $("progress-text").textContent = `Проверено ${state.doneNow} из ${state.total}`;
+  const waiting = state.pending.size - state.working.size;
+  $("progress-text").textContent = `Проверено ${state.doneNow} из ${state.total}${waiting > 0 ? ` · в очереди ${waiting}` : ""}`;
   $("progress-sites").replaceChildren(...[...state.working].map(([host, step]) => el("li", {}, `${labelOf(host)} — ${step}`)));
 }
 
-ipc.onBegin(({ total }) => {
+ipc.onBegin(({ total, hosts }) => {
   state.total = total;
   state.doneNow = 0;
   state.working.clear();
+  state.pending = new Set(hosts);
   setRunning(true);
   renderProgress();
+  render();
+});
+ipc.onMore(({ added, hosts }) => {
+  state.total += added;
+  for (const h of hosts) state.pending.add(h);
+  renderProgress();
+  render();
 });
 ipc.onProgress(({ host, step }) => {
+  const first = !state.working.has(host);
   state.working.set(host, step);
   renderProgress();
+  if (first) render(); // the row's button turns into "проверяю…"
 });
 ipc.onSite((result) => {
   state.results[result.host] = result;
   state.working.delete(result.host);
+  state.pending.delete(result.host);
   state.doneNow++;
   renderProgress();
   render();
 });
 ipc.onEnd(({ stopped, fatal }) => {
+  state.pending.clear();
+  state.working.clear();
   setRunning(false);
+  render();
   if (fatal) {
     setStatus("scan-status", `Проверка остановлена: ${fatal}`, "bad");
     $("key-card").open = true;
@@ -297,6 +315,18 @@ ipc.onEnd(({ stopped, fatal }) => {
 });
 
 // ---------- results ----------
+
+/** One site, or the failed ones: joins a running scan or starts its own. */
+async function scanHosts(hosts) {
+  if (!hosts.length) return;
+  setStatus("scan-status", "");
+  const res = await ipc.scanHosts(hosts);
+  if (res?.error) setStatus("scan-status", res.error, "bad");
+}
+
+$("retry-failed").addEventListener("click", () =>
+  scanHosts(state.hosts.map((h) => h.host).filter((h) => needsRetry(state.results[h]) && !state.pending.has(h))),
+);
 
 $("clear").addEventListener("click", async () => {
   if (!confirm("Стереть результаты проверки? Список доменов останется.")) return;
@@ -418,8 +448,33 @@ function thumbGrid(host, r) {
   return el("div", {}, siteActions(host, r), grid);
 }
 
+/** The row's own button: scan this one site (again), or where it stands in the running scan. */
+function rowAction(host, r) {
+  if (state.working.has(host)) return el("span", { class: "hint" }, "проверяю…");
+  if (state.pending.has(host)) return el("span", { class: "hint" }, "в очереди");
+  return el(
+    "button",
+    {
+      class: needsRetry(r) ? "small" : "small ghost",
+      title: r ? "Проверить только этот сайт ещё раз" : "Проверить только этот сайт",
+      onclick: (e) => {
+        e.stopPropagation();
+        scanHosts([host]);
+      },
+    },
+    r ? "Заново" : "Проверить",
+  );
+}
+
+function renderRetry() {
+  const n = state.hosts.filter(({ host }) => needsRetry(state.results[host]) && !state.pending.has(host)).length;
+  $("retry-failed").hidden = n === 0;
+  $("retry-failed").textContent = `Повторить сайты с ошибками (${n})`;
+}
+
 function render() {
   renderChips();
+  renderRetry();
   const rows = [];
   for (const { host, label } of state.hosts) {
     const v = verdictOf(host);
@@ -427,7 +482,8 @@ function render() {
     const r = state.results[host];
     const expandable = r && imagesOf(r).length > 0;
     const isOpen = expandable && state.open.has(host);
-    const note = r?.error ?? (r?.unchecked ? `не проверено кадров: ${r.unchecked}` : null);
+    const note =
+      r?.error ?? ([r?.note, r?.unchecked ? `не проверено кадров: ${r.unchecked}` : null].filter(Boolean).join("; ") || null);
     rows.push(
       el(
         "tr",
@@ -453,9 +509,10 @@ function render() {
         el("td", { class: "n" }, r && !r.error ? String(r.unsure.length) : ""),
         el("td", { class: "n" }, r ? String(imagesOf(r).filter((i) => i.redraw).length || "") : ""),
         el("td", { class: "n" }, r && !r.error ? String(r.images) : ""),
+        el("td", { class: "act" }, rowAction(host, r)),
       ),
     );
-    if (isOpen) rows.push(el("tr", { class: "details" }, el("td", { colspan: "7" }, thumbGrid(host, r))));
+    if (isOpen) rows.push(el("tr", { class: "details" }, el("td", { colspan: "8" }, thumbGrid(host, r))));
   }
   $("rows").replaceChildren(...rows);
   $("empty").hidden = rows.length > 0;

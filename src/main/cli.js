@@ -1,7 +1,8 @@
 "use strict";
 
-// Developer harness: `[PROVIDER=…] API_KEY=… npm run scan -- site1.ru site2.ru`
+// Developer harness: `[PROVIDER=…] API_KEY=… [CACHE=file.json] npm run scan -- site1.ru site2.ru`
 // Runs the same scanner as the app, without the window, and prints JSON.
+// Without CACHE every image goes to the model — an honest speed measure.
 
 const { app } = require("electron");
 const { scanSites } = require("./scanner");
@@ -22,6 +23,7 @@ app.whenReady().then(async () => {
       hosts,
       creds,
       signal: new AbortController().signal,
+      cacheFile: process.env.CACHE,
       onProgress: ({ host, step }) => process.stderr.write(`${host}: ${step}\n`),
       onSite: (r) =>
         console.log(
@@ -34,6 +36,8 @@ app.whenReady().then(async () => {
             people: r.people.map((p) => `${p.kind}: ${p.url.split("/").pop()}`),
             unsure: r.unsure.map((p) => p.url),
             unchecked: r.unchecked,
+            note: r.note,
+            sec: Math.round((Date.now() - started) / 1000),
           }),
         ),
     });

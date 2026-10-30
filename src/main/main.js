@@ -4,7 +4,7 @@ const path = require("node:path");
 const fs = require("node:fs");
 const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme } = require("electron");
 const sharp = require("sharp");
-const { scanSites } = require("./scanner");
+const { createScan } = require("./scanner");
 const { parseDomains, displayHost, displayUrl } = require("./domains");
 const { checkKey, providerList, FatalKeyError } = require("./providers");
 const { writeExcel } = require("./excel");
@@ -23,7 +23,7 @@ if (process.env.LPG_USER_DATA) app.setPath("userData", process.env.LPG_USER_DATA
 sharp.concurrency(1);
 
 let win = null;
-let running = null; // AbortController of the scan in progress
+let running = null; // { ctrl, scan } of the scan in progress
 let redrawing = null; // AbortController of a site-wide redraw
 const jobs = { viewer: null, studio: null }; // AbortController of a single drawing per window part
 
@@ -67,7 +67,7 @@ function createWindow() {
   win.webContents.on("will-navigate", (e) => e.preventDefault());
   // Hidden scan windows must not keep the app alive once the user closed it.
   win.on("closed", () => {
-    running?.abort(new Error("closed"));
+    running?.ctrl.abort(new Error("closed"));
     redrawing?.abort(new Error("closed"));
     jobs.viewer?.abort();
     jobs.studio?.abort();
@@ -182,49 +182,67 @@ ipcMain.handle("results:clear", () => {
   saveState({ domainsText: state.domainsText, results: {} });
 });
 
-ipcMain.handle("scan:stop", () => running?.abort(new Error("stopped")));
+ipcMain.handle("scan:stop", () => running?.ctrl.abort(new Error("stopped")));
 
-/** Scans, one site at a time, every listed domain without a saved result (or all of them with `again`). */
-ipcMain.handle("scan:start", async (_e, { domainsText, again }) => {
-  if (running) return { error: "Проверка уже идёт." };
+/** A site's fresh result replaces the old one; frames already drawn for the same images stay. */
+function saveSiteResult(result) {
+  const s = loadState();
+  const old = s.results[result.host];
+  if (old) {
+    for (const img of [...result.people, ...result.unsure]) {
+      const prev = [...old.people, ...old.unsure].find((o) => o.id === img.id);
+      if (prev?.redraw) img.redraw = prev.redraw;
+    }
+  }
+  s.results[result.host] = result;
+  saveState(s);
+  send("scan:site", result);
+}
+
+/**
+ * Scans listed domains without a saved result (all of them with `again`), or
+ * exactly `hosts` — one site or the failed ones. Sites asked for while a scan
+ * runs join it; nothing already done is scanned again.
+ */
+ipcMain.handle("scan:start", async (_e, { domainsText, again, hosts: only }) => {
+  if (running) {
+    if (!only?.length) return { error: "Проверка уже идёт." };
+    const added = running.scan.add(only);
+    if (added) send("scan:more", { added, hosts: only });
+    return { ok: true, added };
+  }
   const creds = credsFor("recognize");
   if (!creds.apiKey) return { error: "Сначала вставьте ключ и нажмите «Сохранить»." };
   const state = loadState();
-  state.domainsText = domainsText;
-  const hosts = parseDomains(domainsText);
-  if (!hosts.length) return { error: "В списке нет ни одного домена." };
-  const todo = again ? hosts : hosts.filter((h) => !state.results[h]);
-  saveState(state);
-  if (!todo.length) return { error: "Все сайты из списка уже проверены. Нажмите «Проверить заново», если нужно." };
+  let todo;
+  if (only?.length) todo = only;
+  else {
+    state.domainsText = domainsText;
+    saveState(state);
+    const hosts = parseDomains(domainsText);
+    if (!hosts.length) return { error: "В списке нет ни одного домена." };
+    todo = again ? hosts : hosts.filter((h) => !state.results[h]);
+    if (!todo.length) return { error: "Все сайты из списка уже проверены. Нажмите «Проверить заново», если нужно." };
+  }
 
-  running = new AbortController();
-  send("scan:begin", { total: todo.length });
+  const ctrl = new AbortController();
+  const scan = createScan({
+    creds,
+    signal: ctrl.signal,
+    cacheFile: path.join(app.getPath("userData"), "verdicts.json"),
+    onProgress: (p) => send("scan:progress", p),
+    onSite: saveSiteResult,
+  });
+  running = { ctrl, scan };
+  send("scan:begin", { total: todo.length, hosts: todo });
+  scan.add(todo);
   let fatal = null;
   try {
-    await scanSites({
-      hosts: todo,
-      creds,
-      signal: running.signal,
-      onProgress: (p) => send("scan:progress", p),
-      onSite: (result) => {
-        const s = loadState();
-        // A re-scan keeps frames already drawn for the same images.
-        const old = s.results[result.host];
-        if (old) {
-          for (const img of [...result.people, ...result.unsure]) {
-            const prev = [...old.people, ...old.unsure].find((o) => o.id === img.id);
-            if (prev?.redraw) img.redraw = prev.redraw;
-          }
-        }
-        s.results[result.host] = result;
-        saveState(s);
-        send("scan:site", result);
-      },
-    });
+    await scan.done;
   } catch (e) {
     fatal = e instanceof FatalKeyError ? e.message : null;
   }
-  const stopped = running.signal.aborted && !fatal;
+  const stopped = ctrl.signal.aborted && !fatal;
   running = null;
   send("scan:end", { stopped, fatal });
   return { ok: true };

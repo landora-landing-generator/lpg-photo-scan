@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("api", {
   importDroppedFiles: (files) =>
     ipcRenderer.invoke("domains:import", { paths: [...files].map((f) => webUtils.getPathForFile(f)).filter(Boolean) }),
   startScan: (domainsText, again) => ipcRenderer.invoke("scan:start", { domainsText, again }),
+  scanHosts: (hosts) => ipcRenderer.invoke("scan:start", { hosts }),
   stopScan: () => ipcRenderer.invoke("scan:stop"),
   clearResults: () => ipcRenderer.invoke("results:clear"),
   saveExcel: () => ipcRenderer.invoke("excel:save"),
@@ -33,6 +34,7 @@ contextBridge.exposeInMainWorld("api", {
   studioCancel: () => ipcRenderer.invoke("studio:cancel"),
   studioSave: (file) => ipcRenderer.invoke("studio:save", { file }),
   onBegin: on("scan:begin"),
+  onMore: on("scan:more"),
   onProgress: on("scan:progress"),
   onSite: on("scan:site"),
   onEnd: on("scan:end"),
