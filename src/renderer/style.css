@@ -486,3 +486,5 @@ table.results { width: 100%; border-collapse: collapse; }
   .results .n:nth-child(n + 4) { display: none; }
 }
 .hint:empty { display: none; }
+
+select.draw-model { max-width: 300px; }

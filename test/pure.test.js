@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseDomains, normalizeHost, sameSite, displayHost } from "../src/main/domains.js";
 import { imageKey, cssUrls } from "../src/main/image-urls.js";
 import { verdictOf } from "../src/main/verdict.js";
-import { parseKind } from "../src/main/classify.js";
+import { parseKind, cleanPrompt } from "../src/main/classify.js";
 import { aspectRatioFor, openAiSize } from "../src/main/draw.js";
 import { baseName } from "../src/main/redraw-names.js";
 import { newer } from "../src/main/update.js";
@@ -60,10 +60,14 @@ describe("verdict", () => {
 });
 
 describe("model answer", () => {
-  it("parses fenced JSON and falls back to unsure", () => {
-    expect(parseKind('```json\n{"kind":"people"}\n```')).toBe("people");
-    expect(parseKind('{"kind":"cat"}')).toBe("unsure");
-    expect(parseKind("no idea")).toBe("unsure");
+  it("reads one word, tolerates noise, falls back to unsure", () => {
+    expect(parseKind("people")).toBe("people");
+    expect(parseKind("Photo.")).toBe("photo");
+    expect(parseKind('{"kind":"graphic"}')).toBe("graphic");
+    expect(parseKind("cat")).toBe("unsure");
+  });
+  it("cleans a described prompt", () => {
+    expect(cleanPrompt('Prompt: "A technician at work."')).toBe("A technician at work.");
   });
 });
 

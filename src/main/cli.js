@@ -12,7 +12,7 @@ app.whenReady().then(async () => {
   const hosts = parseDomains(process.argv.slice(2).join(" "));
   const creds = { provider: process.env.PROVIDER ?? "openrouter", apiKey: process.env.API_KEY };
   if (!hosts.length || !creds.apiKey) {
-    console.error("usage: [PROVIDER=openrouter|polza|openai|anthropic] API_KEY=… npm run scan -- <domain…>");
+    console.error("usage: [PROVIDER=openrouter|polza|openai] API_KEY=… npm run scan -- <domain…>");
     app.exit(2);
     return;
   }

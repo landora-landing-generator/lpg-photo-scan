@@ -7,6 +7,7 @@ const on = (channel) => (fn) => ipcRenderer.on(channel, (_e, payload) => fn(payl
 contextBridge.exposeInMainWorld("api", {
   getState: () => ipcRenderer.invoke("state:get"),
   saveSettings: (settings) => ipcRenderer.invoke("settings:save", settings),
+  setDrawModel: (model) => ipcRenderer.invoke("settings:draw-model", model),
   parseDomains: (text) => ipcRenderer.invoke("domains:parse", text),
   importDomains: () => ipcRenderer.invoke("domains:import", {}),
   // Dropped File objects carry no path in a sandboxed page; webUtils resolves it here.
@@ -20,6 +21,7 @@ contextBridge.exposeInMainWorld("api", {
   originalImage: (host, id) => ipcRenderer.invoke("image:original", { host, id }),
   redrawnImage: (host, id) => ipcRenderer.invoke("image:redrawn", { host, id }),
   redrawImage: (host, id, prompt) => ipcRenderer.invoke("image:redraw", { host, id, prompt }),
+  cancelRedraw: () => ipcRenderer.invoke("image:redraw-cancel"),
   saveImage: (host, id) => ipcRenderer.invoke("image:save", { host, id }),
   redrawSite: (host) => ipcRenderer.invoke("site:redraw", { host }),
   stopRedrawSite: () => ipcRenderer.invoke("site:redraw-stop"),
@@ -27,6 +29,7 @@ contextBridge.exposeInMainWorld("api", {
   studioReference: () => ipcRenderer.invoke("studio:reference", {}),
   studioDroppedReference: (file) => ipcRenderer.invoke("studio:reference", { path: webUtils.getPathForFile(file) }),
   studioGenerate: (params) => ipcRenderer.invoke("studio:generate", params),
+  studioCancel: () => ipcRenderer.invoke("studio:cancel"),
   studioSave: (file) => ipcRenderer.invoke("studio:save", { file }),
   onBegin: on("scan:begin"),
   onProgress: on("scan:progress"),

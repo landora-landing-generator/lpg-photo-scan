@@ -59,9 +59,7 @@ const providerById = (id) => keys.providers.find((p) => p.id === id);
 function renderProvider() {
   const p = providerById($("provider").value);
   if (!p) return;
-  $("key-hint").textContent = `Где взять: ${p.hint}. Цена: ${p.scanCost}${p.canDraw ? `, новый кадр ${p.drawCost}` : ""}.${
-    p.canDraw ? "" : " Этот сервис только ищет людей — рисовать новые кадры он не умеет."
-  }`;
+  $("key-hint").textContent = `Где взять: ${p.hint}. Цена: ${p.scanCost}, новый кадр ${p.drawCost}.`;
   // Fields show the model in force: the service's default unless the user typed another.
   const prev = providerById(keys.shown);
   const fillModel = (id, def, prevDef) => {
@@ -69,10 +67,27 @@ function renderProvider() {
     if (!v || v === prevDef) $(id).value = def ?? "";
   };
   fillModel("recognize-model", p.visionModel, prev?.visionModel);
-  fillModel("draw-model", p.drawModel, prev?.drawModel);
-  $("draw-model").placeholder = p.canDraw ? "" : "этот сервис не рисует";
-  $("draw-model").disabled = !p.canDraw;
+  renderDrawModels();
   keys.shown = p.id;
+}
+
+/** Drawing model pickers in the viewer and the studio — one shared, remembered choice. */
+function renderDrawModels() {
+  const p = providerById($("provider").value);
+  if (!p) return;
+  const current = p.drawModels.some((m) => m.id === keys.settings.models.draw) ? keys.settings.models.draw : p.drawModel;
+  for (const id of ["viewer-model", "studio-model"]) {
+    $(id).replaceChildren(...p.drawModels.map((m) => el("option", { value: m.id, selected: m.id === current }, m.label)));
+    $(id).title = "Чем рисовать";
+  }
+}
+
+for (const id of ["viewer-model", "studio-model"]) {
+  $(id).addEventListener("change", () => {
+    keys.settings.models.draw = $(id).value;
+    ipc.setDrawModel($(id).value);
+    renderDrawModels();
+  });
 }
 
 /** Folded card title: which service, and whether its key works. */
@@ -112,7 +127,9 @@ $("key-save").addEventListener("click", async () => {
     // A default model is stored as "default", so a later app update can move it.
     models: {
       recognize: $("recognize-model").value.trim() === providerById(provider).visionModel ? "" : $("recognize-model").value,
-      draw: $("draw-model").value.trim() === providerById(provider).drawModel ? "" : $("draw-model").value,
+      draw: keys.settings.models.draw && providerById(provider).drawModels.some((m) => m.id === keys.settings.models.draw)
+        ? keys.settings.models.draw
+        : "",
     },
     // The default text is stored as "use the default", so it follows app updates.
     redrawRules: rules === keys.defaultRules ? "" : rules,
@@ -476,7 +493,8 @@ function step(delta) {
 }
 
 function closeViewer() {
-  if (viewer.busy) return;
+  // Closing never waits: a drawing in progress is cancelled.
+  if (viewer.busy) ipc.cancelRedraw();
   $("viewer").hidden = true;
 }
 
@@ -487,21 +505,34 @@ $("viewer").addEventListener("click", (e) => {
   if (e.target === $("viewer")) closeViewer();
 });
 
+function setViewerBusy(on) {
+  viewer.busy = on;
+  $("viewer-redraw").textContent = on ? "Отменить" : currentImage()?.redraw ? "Перерисовать ещё раз" : "Перерисовать";
+  $("viewer-redraw").classList.toggle("primary", !on);
+  $("viewer-redraw").classList.toggle("danger", on);
+  $("viewer-prev").disabled = on || $("viewer-prev").disabled;
+  $("viewer-next").disabled = on || $("viewer-next").disabled;
+}
+
 $("viewer-redraw").addEventListener("click", async () => {
+  if (viewer.busy) {
+    ipc.cancelRedraw();
+    return;
+  }
   const img = currentImage();
-  if (!img || viewer.busy) return;
-  viewer.busy = true;
-  $("viewer-redraw").disabled = true;
+  if (!img) return;
+  const id = img.id;
+  setViewerBusy(true);
   $("viewer-save").disabled = true;
   $("viewer-new-wait").hidden = false;
-  $("viewer-new-wait").textContent = "Рисую новый кадр… обычно 10–40 секунд.";
+  $("viewer-new-wait").textContent = "Рисую новый кадр… обычно 20–60 секунд. Можно отменить или закрыть окно.";
   $("viewer-new").removeAttribute("src");
   setStatus("viewer-status", "");
-  const res = await ipc.redrawImage(viewer.host, img.id, $("viewer-prompt").value);
-  viewer.busy = false;
-  $("viewer-redraw").disabled = false;
+  const res = await ipc.redrawImage(viewer.host, id, $("viewer-prompt").value);
+  setViewerBusy(false);
+  if (viewer.id !== id || $("viewer").hidden) return; // the user moved on
   if (res.error) {
-    setStatus("viewer-status", res.error, "bad");
+    setStatus("viewer-status", res.error, res.cancelled ? "" : "bad");
     await showRedrawn(currentImage());
     return;
   }
@@ -518,7 +549,7 @@ $("viewer-save").addEventListener("click", async () => {
 
 // ---------- studio: own picture as a reference, or words only ----------
 
-const studio = { refId: null, file: null };
+const studio = { refId: null, file: null, busy: false };
 
 function setReference(res) {
   if (!res || res.canceled) return;
@@ -560,13 +591,24 @@ $("studio-clear").addEventListener("click", () => {
   setStatus("studio-status", "");
 });
 
+function setStudioBusy(on) {
+  studio.busy = on;
+  $("studio-go").textContent = on ? "Отменить" : studio.file ? "Нарисовать ещё" : "Нарисовать";
+  $("studio-go").classList.toggle("primary", !on);
+  $("studio-go").classList.toggle("danger", on);
+}
+
 $("studio-go").addEventListener("click", async () => {
-  $("studio-go").disabled = true;
-  setStatus("studio-status", "Рисую… обычно 10–40 секунд.");
+  if (studio.busy) {
+    ipc.studioCancel();
+    return;
+  }
+  setStudioBusy(true);
+  setStatus("studio-status", "Рисую… обычно 20–60 секунд.");
   const res = await ipc.studioGenerate({ refId: studio.refId, prompt: $("studio-prompt").value, aspect: $("studio-aspect").value });
-  $("studio-go").disabled = false;
+  setStudioBusy(false);
   if (res.error) {
-    setStatus("studio-status", res.error, "bad");
+    setStatus("studio-status", res.error, res.cancelled ? "" : "bad");
     return;
   }
   studio.file = res.file;
@@ -647,7 +689,6 @@ $("update-open").addEventListener("click", () => updateUrl && ipc.openExternal(u
   $("provider").value = s.settings.provider;
   $("key").value = s.settings.keys[s.settings.provider] ?? "";
   $("recognize-model").value = s.settings.models.recognize;
-  $("draw-model").value = s.settings.models.draw;
   keys.shown = s.settings.provider;
   $("redraw-rules").value = s.settings.redrawRules || s.defaultRedrawRules;
   renderProvider();

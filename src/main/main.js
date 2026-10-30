@@ -25,6 +25,27 @@ sharp.concurrency(1);
 let win = null;
 let running = null; // AbortController of the scan in progress
 let redrawing = null; // AbortController of a site-wide redraw
+const jobs = { viewer: null, studio: null }; // AbortController of a single drawing per window part
+
+/** A service that never answers must not hang the button forever. */
+const DRAW_TIMEOUT = 180_000;
+
+/** Runs one drawing job that the user can cancel; turns abort/timeout into plain words. */
+async function cancellable(slot, fn) {
+  jobs[slot]?.abort();
+  const ctrl = new AbortController();
+  jobs[slot] = ctrl;
+  const signal = AbortSignal.any([ctrl.signal, AbortSignal.timeout(DRAW_TIMEOUT)]);
+  try {
+    return await fn(signal);
+  } catch (e) {
+    if (ctrl.signal.aborted) return { error: "Отменено.", cancelled: true };
+    if (signal.aborted) return { error: "Сервис не ответил за 3 минуты. Попробуйте ещё раз или выберите другой сервис." };
+    return { error: e.message || String(e) };
+  } finally {
+    if (jobs[slot] === ctrl) jobs[slot] = null;
+  }
+}
 
 function createWindow() {
   win = new BrowserWindow({
@@ -48,6 +69,8 @@ function createWindow() {
   win.on("closed", () => {
     running?.abort(new Error("closed"));
     redrawing?.abort(new Error("closed"));
+    jobs.viewer?.abort();
+    jobs.studio?.abort();
     app.quit();
   });
 
@@ -109,6 +132,17 @@ ipcMain.handle(
     return apiKey ? checkKey({ provider, apiKey }) : { ok: false, message: "Вставьте ключ." };
   }),
 );
+
+/** The drawing model picked in the viewer or studio — remembered for next time. */
+ipcMain.handle("settings:draw-model", (_e, model) => {
+  const s = loadSettings();
+  saveSettings({
+    provider: s.provider,
+    key: s.keys[s.provider] ?? "",
+    models: { ...s.models, draw: model === providerList().find((p) => p.id === s.provider)?.drawModel ? "" : model },
+    redrawRules: s.redrawRules,
+  });
+});
 
 ipcMain.handle("domains:parse", (_e, text) => parseDomains(text).map((host) => ({ host, label: displayHost(host) })));
 
@@ -198,14 +232,14 @@ ipcMain.handle("scan:start", async (_e, { domainsText, again }) => {
 
 ipcMain.handle("image:original", guarded((_e, { host, id }) => originalPreview(host, id)));
 ipcMain.handle("image:redrawn", (_e, { host, id }) => redrawPreview(host, id));
-ipcMain.handle(
-  "image:redraw",
-  guarded(async (_e, { host, id, prompt }) => {
-    const img = await redrawImage(host, id, { prompt });
+ipcMain.handle("image:redraw", (_e, { host, id, prompt }) =>
+  cancellable("viewer", async (signal) => {
+    const img = await redrawImage(host, id, { prompt, signal });
     send("image:updated", { host, image: img });
     return { image: img, preview: redrawPreview(host, id) };
   }),
 );
+ipcMain.handle("image:redraw-cancel", () => jobs.viewer?.abort());
 
 ipcMain.handle(
   "image:save",
@@ -257,7 +291,9 @@ ipcMain.handle(
         if (redrawing.signal.aborted) break;
         send("site:redraw-progress", { host, done, total: todo.length });
         try {
-          const updated = await redrawImage(host, img.id, { signal: redrawing.signal });
+          const updated = await redrawImage(host, img.id, {
+            signal: AbortSignal.any([redrawing.signal, AbortSignal.timeout(DRAW_TIMEOUT)]),
+          });
           send("image:updated", { host, image: updated });
         } catch (e) {
           if (e instanceof FatalKeyError) throw e;
@@ -292,7 +328,8 @@ ipcMain.handle(
     return loadReference(file);
   }),
 );
-ipcMain.handle("studio:generate", guarded((_e, params) => generate(params)));
+ipcMain.handle("studio:generate", (_e, params) => cancellable("studio", (signal) => generate({ ...params, signal })));
+ipcMain.handle("studio:cancel", () => jobs.studio?.abort());
 ipcMain.handle(
   "studio:save",
   guarded(async (_e, { file }) => {

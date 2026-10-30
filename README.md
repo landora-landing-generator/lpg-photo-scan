@@ -4,7 +4,7 @@
 
 **Скачать и установить:** https://landora-landing-generator.github.io/lpg-photo-scan/
 
-- ключ одного сервиса на выбор: OpenRouter, polza.ai, OpenAI или Anthropic;
+- ключ одного сервиса на выбор: OpenRouter, polza.ai или OpenAI;
 - список сайтов из Excel, CSV или TXT;
 - новый кадр того же размера, сжатый для сайта; свой образец или описание.
 

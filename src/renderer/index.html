@@ -55,8 +55,6 @@
             <div class="models">
               <label for="recognize-model">Поиск людей</label>
               <input id="recognize-model" type="text" spellcheck="false" />
-              <label for="draw-model">Новые кадры</label>
-              <input id="draw-model" type="text" spellcheck="false" />
               <label for="redraw-rules">Как рисовать</label>
               <textarea id="redraw-rules" rows="4"></textarea>
             </div>
@@ -142,6 +140,7 @@
                   <option value="3:4">Вертикальный 3:4</option>
                   <option value="9:16">Вертикальный 9:16</option>
                 </select>
+                <select id="studio-model" class="draw-model" aria-label="Модель рисования"></select>
                 <button id="studio-clear" hidden>Убрать образец</button>
                 <button id="studio-go" class="primary push-right">Нарисовать</button>
               </div>
@@ -191,6 +190,7 @@
         <div class="row between">
           <span id="viewer-status" class="status"></span>
           <div class="row push-right">
+            <select id="viewer-model" class="draw-model" aria-label="Модель рисования"></select>
             <button id="viewer-save">Скачать на компьютер</button>
             <button id="viewer-redraw" class="primary">Перерисовать</button>
           </div>
@@ -220,7 +220,6 @@
         </ul>
         <h3>Полезно знать</h3>
         <ul>
-          <li>С ключом Anthropic можно только искать людей — рисовать он не умеет.</li>
           <li>Новый кадр — того же размера, что старый, уже сжат для сайта.</li>
           <li>«Скачать новые кадры в папку» кладёт рядом файл replacements.csv — что на что менять.</li>
           <li>Всё сохраняется само — приложение можно закрыть.</li>

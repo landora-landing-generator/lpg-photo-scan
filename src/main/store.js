@@ -48,7 +48,8 @@ function loadSettings() {
   const keys = {};
   for (const [id, v] of Object.entries(s.keys ?? {})) keys[id] = unseal(v);
   return {
-    provider: s.provider ?? "openrouter",
+    // "anthropic" was offered in 0.1.0 and dropped: it cannot draw.
+    provider: ["openrouter", "polza", "openai"].includes(s.provider) ? s.provider : "openrouter",
     keys,
     models: { recognize: s.models?.recognize ?? "", draw: s.models?.draw ?? "" },
     redrawRules: s.redrawRules ?? "",

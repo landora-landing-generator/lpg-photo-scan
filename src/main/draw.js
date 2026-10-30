@@ -1,6 +1,6 @@
 "use strict";
 
-const { FatalKeyError, providerOf, httpError } = require("./providers");
+const { providerOf, httpError } = require("./providers");
 
 const RATIOS = [
   ["1:1", 1],
@@ -18,8 +18,9 @@ function aspectRatioFor(width, height) {
   return RATIOS.reduce((best, r) => (Math.abs(r[1] - target) < Math.abs(best[1] - target) ? r : best))[0];
 }
 
-/** Gemini tiers: 1K is ~1024 on the long side; bigger originals ask for 2K. */
-const tierFor = (width, height) => (Math.max(width, height) > 1100 ? "2K" : "1K");
+/** Gemini tiers: 1K is ~1024 on the long side; bigger originals ask for 2K. Other models take no tier. */
+const tierFor = (model, width, height) =>
+  /gemini|nano-banana/.test(model) ? (Math.max(width, height) > 1100 ? "2K" : "1K") : undefined;
 
 /**
  * gpt-image-2 takes any WIDTHxHEIGHT on a 16px grid between 1:3 and 3:1. The
@@ -54,7 +55,7 @@ async function drawOpenRouter(p, model, apiKey, prompt, size, signal, reference)
       model,
       prompt,
       aspect_ratio: aspectRatioFor(size.width, size.height),
-      resolution: tierFor(size.width, size.height),
+      resolution: tierFor(model, size.width, size.height),
       ...(reference ? { input_references: [{ type: "image_url", image_url: { url: dataUrl(reference) } }] } : {}),
     }),
   });
@@ -108,7 +109,7 @@ async function drawPolza(p, model, apiKey, prompt, size, signal, reference) {
       input: {
         prompt,
         aspect_ratio: aspectRatioFor(size.width, size.height),
-        image_resolution: tierFor(size.width, size.height),
+        image_resolution: tierFor(model, size.width, size.height),
         output_format: "jpeg",
         ...(reference ? { images: [{ type: "base64", data: dataUrl(reference) }] } : {}),
       },
@@ -125,6 +126,7 @@ async function drawPolza(p, model, apiKey, prompt, size, signal, reference) {
     }
     if (Date.now() - started > 300_000) throw new Error("polza.ai рисует дольше 5 минут — попробуйте позже");
     await new Promise((r) => setTimeout(r, 3000));
+    signal?.throwIfAborted();
     const poll = await fetch(`${p.base}/media/${encodeURIComponent(job.id)}`, { headers, signal });
     body = await poll.text();
     if (!poll.ok) throw httpError(p, poll.status, body);
@@ -142,7 +144,6 @@ async function drawPolza(p, model, apiKey, prompt, size, signal, reference) {
  */
 async function drawImage({ provider, apiKey, model }, prompt, size, { signal, reference } = {}) {
   const p = providerOf(provider);
-  if (!p.drawModel) throw new FatalKeyError(`${p.label} не рисует картинки. Чтобы перерисовывать, возьмите ключ OpenRouter, polza.ai или OpenAI.`);
   const m = model || p.drawModel;
   if (provider === "openrouter") return drawOpenRouter(p, m, apiKey, prompt, size, signal, reference);
   if (provider === "openai") return drawOpenAi(p, m, apiKey, prompt, size, signal, reference);

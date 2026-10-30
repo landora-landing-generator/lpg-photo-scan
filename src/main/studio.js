@@ -44,7 +44,7 @@ async function loadReference(file) {
  * With a reference: a new frame like it, sized like it, under the redraw rules
  * (the description is optional). Without: the description is the whole prompt.
  */
-async function generate({ refId, prompt, aspect }) {
+async function generate({ refId, prompt, aspect, signal }) {
   const text = String(prompt ?? "").trim();
   const ref = refId ? refs.get(refId) : null;
   if (refId && !ref) throw new Error("Картинка-образец потерялась — перетащите её ещё раз.");
@@ -56,7 +56,7 @@ async function generate({ refId, prompt, aspect }) {
   const full = ref
     ? [`Нарисуй новую фотографию по образцу на приложенной картинке.`, text, redrawRules()].filter(Boolean).join("\n\n")
     : text;
-  const drawn = await drawImage(draw, full, size, { reference: ref?.jpeg });
+  const drawn = await drawImage(draw, full, size, { reference: ref?.jpeg, signal });
   const web = await toWebJpeg(drawn, { ...size, bytes: 0 });
 
   fs.mkdirSync(studioDir(), { recursive: true });
