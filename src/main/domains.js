@@ -39,10 +39,10 @@ function normalizeHost(raw) {
   return host;
 }
 
-/** Same site for crawling: "www." and the bare host are one site. */
+/** Same site for crawling: "www." and the bare host are one site (a port counts, for the self-test's local site). */
 function sameSite(url, host) {
   try {
-    const h = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    const h = new URL(url).host.toLowerCase().replace(/^www\./, "");
     return h === host;
   } catch {
     return false;

@@ -396,9 +396,10 @@ async function collectByBrowser(host, ses, signal, onStep) {
  * A scan that sites can be added to while it runs. onSite(result) fires as
  * each site finishes, onProgress({ host, step }) while it works. A bad key or
  * an empty balance stops everything: `done` rejects with FatalKeyError.
- * `cacheFile` keeps the model's answers between runs (optional).
+ * `cacheFile` keeps the model's answers between runs (optional);
+ * `classifyImage` replaces the model in the self-test.
  */
-function createScan({ creds, signal, onSite, onProgress, cacheFile }) {
+function createScan({ creds, signal, onSite, onProgress, cacheFile, classifyImage = classify }) {
   const inner = new AbortController();
   const stop = AbortSignal.any([signal, inner.signal]);
   const ses = scanSession(`${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
@@ -417,7 +418,7 @@ function createScan({ creds, signal, onSite, onProgress, cacheFile }) {
 
   const modelCalls = createLimiter(MODEL_CALLS_AT_ONCE);
   const ask = (jpeg) =>
-    modelCalls(() => (stop.aborted ? Promise.reject(stop.reason) : classify(creds, jpeg, { signal: stop })));
+    modelCalls(() => (stop.aborted ? Promise.reject(stop.reason) : classifyImage(creds, jpeg, { signal: stop })));
 
   // One job per file URL for the whole run: shared by every site that shows it.
   // Holds only what a result needs — the thumbnail stays for people and doubts.

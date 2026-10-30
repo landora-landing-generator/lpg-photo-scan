@@ -11,7 +11,9 @@ const { BrowserWindow, safeStorage } = require("electron");
 const sharp = require("sharp");
 const { readImage } = require("./decode");
 const { toWebJpeg } = require("./web-image");
+const http = require("node:http");
 const { collectScript } = require("./page-collector");
+const { createScan } = require("./scanner");
 const { writeExcel } = require("./excel");
 const { parseDomains, displayUrl } = require("./domains");
 const { withTimeout } = require("./limit");
@@ -82,6 +84,56 @@ async function run() {
       return `${found.images.length} images`;
     } finally {
       win.destroy();
+    }
+  });
+  await check("scan over HTTP: pages, sitemap, images, cache", async () => {
+    // A local two-page site: the photo sits on the inner page, found via the sitemap.
+    const photo = await sharp({ create: { width: 400, height: 300, channels: 3, background: "#3366cc" } }).jpeg().toBuffer();
+    const routes = {
+      "/": '<html><body><a href="/about/">about</a></body></html>',
+      "/sitemap.xml": "<urlset><url><loc>http://localhost:PORT/works/</loc></url></urlset>",
+      "/about/": "<html><body>no photos</body></html>",
+      "/works/": '<html><body><img src="/img/p-300x200.jpg"><img src="/img/p.jpg"></body></html>',
+    };
+    const server = http.createServer((req, res) => {
+      if (req.url.startsWith("/img/")) return res.writeHead(200, { "Content-Type": "image/jpeg" }).end(photo);
+      const body = routes[req.url];
+      if (!body) return res.writeHead(404).end();
+      res.writeHead(200, { "Content-Type": req.url.endsWith(".xml") ? "application/xml" : "text/html" });
+      res.end(body.replace("PORT", server.address().port));
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    try {
+      const host = `localhost:${server.address().port}`;
+      // A fake model: every image is a face, and the call count proves the cache.
+      let calls = 0;
+      const cacheFile = path.join(os.tmpdir(), `lpg-selftest-cache-${process.pid}.json`);
+      const runOnce = () =>
+        new Promise((resolve, reject) => {
+          let got = null;
+          const scan = createScan({
+            creds: { provider: "openrouter", apiKey: "x", model: "selftest" },
+            classifyImage: async () => (calls++, "face"),
+            signal: new AbortController().signal,
+            cacheFile,
+            onProgress: () => {},
+            onSite: (r) => (got = r),
+          });
+          scan.add([host]);
+          scan.done.then(() => resolve(got), reject);
+        });
+      try {
+        const r = await withTimeout(runOnce(), 60_000, "scan timeout");
+        if (r.error) throw new Error(r.error);
+        if (r.pages !== 3 || r.people.length !== 1) throw new Error(`pages ${r.pages}, people ${r.people.length}`);
+        await withTimeout(runOnce(), 60_000, "scan timeout");
+        if (calls !== 1) throw new Error(`model asked ${calls} times, cache missed`);
+        return `${r.pages} pages, 1 photo, 1 model call for 2 runs`;
+      } finally {
+        fs.rmSync(cacheFile, { force: true });
+      }
+    } finally {
+      server.close();
     }
   });
   await check("domains: Cyrillic and Excel junk", async () => {
