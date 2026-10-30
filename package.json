@@ -10,7 +10,9 @@
     "scan": "electron src/main/cli.js",
     "test": "vitest run",
     "dist:mac": "electron-builder --mac --arm64 && electron-builder --mac --x64",
-    "dist:win": "electron-builder --win"
+    "dist:win": "electron-builder --win",
+    "dist:mac-arm64": "electron-builder --mac --arm64",
+    "dist:mac-x64": "electron-builder --mac --x64"
   },
   "dependencies": {
     "exceljs": "4.4.0",
