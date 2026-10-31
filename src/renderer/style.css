@@ -490,47 +490,95 @@ button.small { height: 28px; padding: 0 10px; font-size: 13px; }
 }
 .hint:empty { display: none; }
 
-input.draw-model { width: 260px; font-size: 13px; }
+select.draw-model { width: 260px; font-size: 13px; }
 
-/* ---------- drawing in progress: a soft wave runs across the frame ---------- */
+/* ---------- drawing models in the settings ---------- */
+h3.sub { font-size: 14px; margin: 18px 0 4px; }
+.model-list { list-style: none; margin: 8px 0; padding: 0; max-height: 260px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; }
+.model-list li { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.model-list li:last-child { border-bottom: 0; }
+.model-list .name { flex: 1; min-width: 0; }
+.model-list code { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%; }
+#draw-model-new { flex: 1; min-width: 180px; }
+
+/* ---------- drawing in progress: a soft band glides across the frame ----------
+   transform only, constant speed: background-position with ease-in-out
+   repainted the whole frame every tick and stalled at both ends — it jerked. */
 .frame { position: relative; }
-.frame.loading { background: var(--accent-soft); }
+.frame.loading { background: var(--accent-soft); overflow: hidden; }
 .frame.loading::before {
   content: "";
   position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    110deg,
-    transparent 15%,
-    color-mix(in srgb, var(--accent) 18%, transparent) 35%,
-    color-mix(in srgb, var(--card) 70%, transparent) 50%,
-    color-mix(in srgb, var(--accent) 18%, transparent) 65%,
-    transparent 85%
-  );
-  background-size: 250% 100%;
-  animation: frame-wave 1.8s ease-in-out infinite;
-}
-.frame.loading::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
+  top: 0;
   bottom: 0;
-  height: 3px;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  background-size: 50% 100%;
-  background-repeat: no-repeat;
-  animation: frame-bar 1.4s ease-in-out infinite;
+  left: 0;
+  width: 60%;
+  background: linear-gradient(
+    100deg,
+    transparent,
+    color-mix(in srgb, var(--accent) 16%, transparent) 30%,
+    color-mix(in srgb, var(--card) 60%, transparent) 50%,
+    color-mix(in srgb, var(--accent) 16%, transparent) 70%,
+    transparent
+  );
+  will-change: transform;
+  animation: frame-wave 2.4s linear infinite;
 }
 .frame.loading > span { position: relative; z-index: 1; color: var(--text); font-weight: 500; }
 @keyframes frame-wave {
-  from { background-position: 130% 0; }
-  to { background-position: -130% 0; }
-}
-@keyframes frame-bar {
-  from { background-position: -50% 0; }
-  to { background-position: 150% 0; }
+  from { transform: translateX(-100%); }
+  to { transform: translateX(170%); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .frame.loading::before, .frame.loading::after { animation-duration: 4s; }
+  .frame.loading::before { animation-duration: 6s; }
 }
+
+
+/* ---------- checkboxes: pick several sites or frames ---------- */
+input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; cursor: pointer; vertical-align: middle; }
+.results .pick { width: 36px; padding-right: 0; }
+.results tr.details > td { padding-left: 46px; }
+.batch {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.batch-text { font-weight: 600; font-size: 13px; margin-right: 6px; }
+.bar.mini { width: 160px; height: 6px; }
+.bar.mini > div { height: 100%; background: var(--accent); transition: width 0.3s; }
+#batch-status { margin-top: 8px; }
+.thumbs input.pick {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  width: 18px;
+  height: 18px;
+  opacity: 0.85;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+}
+.thumbs figure.picked img { outline: 3px solid var(--accent); outline-offset: -1px; }
+.thumbs figure.picked input.pick, .thumbs figure:hover input.pick { opacity: 1; }
+
+/* ---------- open the site or the frame's page in the browser ---------- */
+button.open-site {
+  height: 22px;
+  width: 22px;
+  padding: 0;
+  margin-left: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  vertical-align: middle;
+  border-radius: 6px;
+}
+button.open-site:hover { color: var(--accent); background: var(--accent-soft); }
+.thumbs figcaption a { color: var(--muted); text-decoration: none; }
+.thumbs figcaption a:hover { color: var(--accent); text-decoration: underline; }

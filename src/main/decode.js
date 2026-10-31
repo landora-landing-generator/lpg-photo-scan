@@ -32,7 +32,10 @@ const DECODE_IN_PAGE = `(async (src) => {
 
 async function chromiumToPng(buf) {
   const win = decoder();
-  if (win.webContents.isLoading()) await new Promise((r) => win.webContents.once("did-finish-load", r));
+  // A crashed decoder page never fires did-finish-load: wait a bounded time.
+  if (win.webContents.isLoading()) {
+    await withTimeout(new Promise((r) => win.webContents.once("did-finish-load", r)), 15_000, "decoder did not load");
+  }
   const src = `data:application/octet-stream;base64,${buf.toString("base64")}`;
   const dataUrl = await withTimeout(
     win.webContents.executeJavaScript(`${DECODE_IN_PAGE}(${JSON.stringify(src)})`),

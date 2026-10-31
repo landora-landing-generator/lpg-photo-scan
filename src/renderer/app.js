@@ -21,7 +21,9 @@ const state = {
   pending: new Set(), // hosts of the running scan not finished yet
   total: 0,
   doneNow: 0,
-  redrawSite: null, // { host, done, total } while a site-wide redraw runs
+  redraw: null, // { hosts, done, total } while a batch redraw runs
+  selected: new Set(), // hosts ticked in the table
+  picked: new Map(), // host → Set of image ids ticked in its frame grid
 };
 
 function el(tag, attrs = {}, ...children) {
@@ -95,40 +97,103 @@ function renderProvider() {
 }
 
 /**
- * Drawing model fields in the viewer and the studio: one shared, remembered
- * value. The service's models are suggestions; any model name can be typed.
+ * Drawing model pickers in the viewer and the studio: one shared, remembered
+ * choice from the saved service's list. The list itself is edited in the
+ * settings — only models the service's catalog lists as drawing get in.
  */
 function renderDrawModels() {
-  const p = providerById($("provider").value);
+  const p = providerById(keys.savedProvider);
   if (!p) return;
-  $("draw-models").replaceChildren(...p.drawModels.map((m) => el("option", { value: m.id }, m.label)));
-  const own = p.id === keys.savedProvider ? keys.settings.models.draw : "";
-  const current = own || p.drawModel;
-  for (const id of ["viewer-model", "studio-model"]) {
-    if (document.activeElement !== $(id)) $(id).value = current;
-    $(id).placeholder = p.drawModel;
+  const list = keys.drawModels[p.id] ?? [];
+  const saved = keys.settings.models.draw;
+  let current = saved || p.drawModel;
+  if (!list.some((m) => m.id === current)) {
+    // A model the list no longer has (or a text model typed by hand in 0.2.x): fall back.
+    current = list.some((m) => m.id === p.drawModel) ? p.drawModel : (list[0]?.id ?? "");
+    commitDrawModel(current);
   }
+  for (const id of ["viewer-model", "studio-model"]) {
+    $(id).replaceChildren(...list.map((m) => el("option", { value: m.id, title: m.id }, m.label)));
+    $(id).value = current;
+  }
+  renderDrawModelList();
 }
 
-function commitDrawModel(id) {
-  const p = providerById($("provider").value);
-  const typed = $(id).value.trim();
-  // Empty or the default means "the service's default", so updates can move it.
-  const model = !typed || typed === p.drawModel ? "" : typed;
+function commitDrawModel(picked) {
+  const p = providerById(keys.savedProvider);
+  // The default is stored as "the service's default", so updates can move it.
+  const model = picked === p.drawModel ? "" : picked;
   if (model === keys.settings.models.draw) return;
   keys.settings.models.draw = model;
   ipc.setDrawModel(model);
-  renderDrawModels();
 }
 
 for (const id of ["viewer-model", "studio-model"]) {
-  $(id).addEventListener("change", () => commitDrawModel(id));
-  $(id).addEventListener("keydown", (e) => {
-    if (e.key === "Enter") $(id).blur();
+  $(id).addEventListener("change", () => {
+    commitDrawModel($(id).value);
+    renderDrawModels();
   });
-  // A click shows every suggestion, not only the ones matching the current text.
-  $(id).addEventListener("focus", () => $(id).select());
 }
+
+/** Settings: the drawing models of the service picked in the key form, each removable. */
+function renderDrawModelList() {
+  const pid = $("provider").value;
+  const list = keys.drawModels[pid] ?? [];
+  $("draw-model-list").replaceChildren(
+    ...list.map((m) =>
+      el(
+        "li",
+        {},
+        el("span", { class: "name" }, m.label),
+        el("code", {}, m.id),
+        el(
+          "button",
+          {
+            class: "icon small",
+            title: list.length > 1 ? "Убрать из списка" : "Последнюю модель убрать нельзя",
+            disabled: list.length <= 1 ? "" : null,
+            onclick: () => applyDrawModels(ipc.removeDrawModel(pid, m.id), ""),
+          },
+          "×",
+        ),
+      ),
+    ),
+  );
+}
+
+async function applyDrawModels(call, okText) {
+  setStatus("draw-model-status", okText === null ? "Проверяю по каталогу сервиса…" : "");
+  const res = await call;
+  if (res.error) {
+    setStatus("draw-model-status", res.error, "bad");
+    return res;
+  }
+  keys.settings = { ...res.settings, keys: keys.settings.keys };
+  keys.drawModels = res.drawModels;
+  renderDrawModels();
+  setStatus("draw-model-status", res.added ? `Добавлена: ${res.added.label}.` : okText ?? "", "ok");
+  return res;
+}
+
+// A fresh catalog arrived (start or saved key): gone models leave, new ones appear.
+ipc.onDrawModels((view) => {
+  keys.settings = { ...view.settings, keys: keys.settings.keys };
+  keys.drawModels = view.drawModels;
+  renderDrawModels();
+});
+
+$("draw-model-add").addEventListener("click", async () => {
+  const id = $("draw-model-new").value.trim();
+  if (!id) return;
+  const res = await applyDrawModels(ipc.addDrawModel($("provider").value, id), null);
+  if (!res.error) $("draw-model-new").value = "";
+});
+$("draw-model-new").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") $("draw-model-add").click();
+});
+$("draw-model-reset").addEventListener("click", () =>
+  applyDrawModels(ipc.resetDrawModels($("provider").value), "Список снова как в каталоге сервиса."),
+);
 
 /** Folded card title: which service, and whether its key works. */
 function renderKeySummary(ok) {
@@ -288,6 +353,7 @@ ipc.onMore(({ added, hosts }) => {
   render();
 });
 ipc.onProgress(({ host, step }) => {
+  if (!state.pending.has(host)) return; // a late echo of a site already reported
   const first = !state.working.has(host);
   state.working.set(host, step);
   renderProgress();
@@ -333,6 +399,7 @@ $("clear").addEventListener("click", async () => {
   await ipc.clearResults();
   state.results = {};
   state.open.clear();
+  state.picked.clear();
   render();
 });
 
@@ -353,7 +420,7 @@ ipc.onImageUpdated(({ host, image }) => {
 });
 
 ipc.onRedrawProgress((p) => {
-  state.redrawSite = p.finished ? null : p;
+  state.redraw = p.finished ? null : p;
   render();
 });
 
@@ -380,46 +447,124 @@ function renderChips() {
   );
 }
 
+// ---------- checkboxes: several sites or frames, one action ----------
+
+const pickedOf = (host) => state.picked.get(host) ?? new Set();
+const notDrawn = (r) => (r?.people ?? []).filter((img) => !img.redraw);
+
+/** Runs a batch redraw and says how it went — once, at the end. */
+async function redrawItems(items) {
+  if (!items.length) return;
+  setStatus("batch-status", "");
+  const res = await ipc.redrawBatch(items);
+  if (res.error) return setStatus("batch-status", res.error, "bad");
+  for (const { host, id } of items) pickedOf(host).delete(id);
+  const failed = res.errors.length;
+  const text = res.stopped
+    ? `Остановлено. Перерисовано кадров: ${res.done} из ${res.total}.`
+    : failed
+      ? `Перерисовано ${res.done} из ${res.total}. Не получилось ${failed}: ${res.errors[0]}`
+      : `Готово: перерисовано кадров — ${res.done}.`;
+  setStatus("batch-status", text, failed ? "bad" : "ok");
+  render();
+}
+
+async function saveSites(hosts) {
+  setStatus("batch-status", "");
+  const res = await ipc.saveSites(hosts);
+  if (res.error) setStatus("batch-status", res.error, "bad");
+  else if (res.saved) setStatus("batch-status", `Сохранено кадров: ${res.count}${res.sites > 1 ? ` с ${res.sites} сайтов` : ""}.`, "ok");
+}
+
+/** Above the table: what is ticked and what can be done with it; the running batch with its stop. */
+function renderBatchBar() {
+  const busy = state.redraw;
+  const hosts = state.hosts.map((h) => h.host).filter((h) => state.selected.has(h));
+  const bar = $("batch");
+  if (busy) {
+    // CSP forbids style attributes; the CSSOM property is allowed.
+    const fill = el("div");
+    fill.style.width = `${Math.round((busy.done / busy.total) * 100)}%`;
+    bar.replaceChildren(
+      el("span", { class: "batch-text" }, `Перерисовываю кадры: ${busy.done} из ${busy.total}`),
+      el("div", { class: "bar mini" }, fill),
+      el("button", { class: "danger push-right", onclick: () => ipc.stopRedraw() }, "Остановить"),
+    );
+    bar.hidden = false;
+    return;
+  }
+  if (!hosts.length) {
+    bar.hidden = true;
+    return;
+  }
+  const results = hosts.map((h) => state.results[h]);
+  const toDraw = results.reduce((n, r) => n + notDrawn(r).length, 0);
+  const drawn = results.reduce((n, r) => n + imagesOf(r).filter((img) => img.redraw).length, 0);
+  const idle = hosts.filter((h) => !state.pending.has(h));
+  bar.replaceChildren(
+    el("span", { class: "batch-text" }, `Выбрано: ${plural(hosts.length, "сайт", "сайта", "сайтов")}`),
+    el("button", { disabled: !idle.length, onclick: () => scanHosts(idle) }, "Проверить"),
+    el(
+      "button",
+      {
+        class: "primary",
+        disabled: !toDraw,
+        title: toDraw ? "Перерисовать все кадры с людьми на выбранных сайтах, которые ещё не перерисованы" : "На выбранных сайтах нечего перерисовывать",
+        onclick: () => redrawItems(hosts.flatMap((h) => notDrawn(state.results[h]).map((img) => ({ host: h, id: img.id })))),
+      },
+      `Перерисовать кадры с людьми${toDraw ? ` (${toDraw})` : ""}`,
+    ),
+    el("button", { disabled: !drawn, onclick: () => saveSites(hosts) }, `Скачать новые кадры${drawn ? ` (${drawn})` : ""}`),
+    el(
+      "button",
+      {
+        class: "ghost push-right",
+        onclick: () => {
+          state.selected.clear();
+          render();
+        },
+      },
+      "Снять выбор",
+    ),
+  );
+  bar.hidden = false;
+}
+
+/** Above a site's frames: redraw the ticked ones, or all with people; download what is drawn. */
 function siteActions(host, r) {
   const drawn = imagesOf(r).filter((img) => img.redraw).length;
-  const left = r.people.filter((img) => !img.redraw).length;
-  const busy = state.redrawSite;
-  const mine = busy?.host === host;
+  const left = notDrawn(r);
+  const picked = [...pickedOf(host)].filter((id) => imagesOf(r).some((img) => img.id === id));
+  const busy = Boolean(state.redraw);
+  const pick = (ids) => {
+    state.picked.set(host, new Set(ids));
+    render();
+  };
   return el(
     "div",
     { class: "site-actions" },
-    mine
-      ? el("button", { class: "danger", onclick: () => ipc.stopRedrawSite() }, `Остановить (готово ${busy.done} из ${busy.total})`)
-      : left > 0 &&
+    picked.length
+      ? el(
+          "button",
+          { class: "primary", disabled: busy, onclick: () => redrawItems(picked.map((id) => ({ host, id }))) },
+          `Перерисовать выбранные (${picked.length})`,
+        )
+      : left.length > 0 &&
           el(
             "button",
-            {
-              class: "primary",
-              disabled: Boolean(busy),
-              onclick: async () => {
-                const res = await ipc.redrawSite(host);
-                if (res.error) alert(res.error);
-                else if (res.errors?.length) alert(`Не получилось ${res.errors.length} кадр(ов):\n${res.errors.slice(0, 3).join("\n")}`);
-              },
-            },
-            `Перерисовать все кадры с людьми (${left})`,
+            { class: "primary", disabled: busy, onclick: () => redrawItems(left.map((img) => ({ host, id: img.id }))) },
+            `Перерисовать все кадры с людьми (${left.length})`,
           ),
-    drawn > 0 &&
-      el(
-        "button",
-        {
-          onclick: async () => {
-            const res = await ipc.saveSite(host);
-            if (res.error) alert(res.error);
-          },
-        },
-        `Скачать новые кадры в папку (${drawn})`,
-      ),
+    picked.length
+      ? el("button", { class: "ghost", onclick: () => pick([]) }, "Снять выбор")
+      : el("button", { class: "ghost", onclick: () => pick(imagesOf(r).map((img) => img.id)) }, "Выбрать все кадры"),
+    drawn > 0 && el("button", { class: "push-right", onclick: () => saveSites([host]) }, `Скачать новые кадры в папку (${drawn})`),
   );
 }
 
 function thumbGrid(host, r) {
   const grid = el("div", { class: "thumbs" });
+  const picked = pickedOf(host);
   for (const [list, label] of [
     [r.people.filter(isFace), "Лица"],
     [r.people.filter((img) => !isFace(img)), "Части людей — руки, фигура со спины"],
@@ -434,13 +579,35 @@ function thumbGrid(host, r) {
       } catch {
         /* keep as is */
       }
+      const box = el("input", {
+        type: "checkbox",
+        class: "pick",
+        title: "Выбрать кадр",
+        "aria-label": "Выбрать кадр",
+        checked: picked.has(img.id),
+        onchange: (e) => {
+          const set = pickedOf(host);
+          e.target.checked ? set.add(img.id) : set.delete(img.id);
+          state.picked.set(host, set);
+          render();
+        },
+      });
       grid.append(
         el(
           "figure",
-          {},
+          { class: picked.has(img.id) ? "picked" : null },
+          box,
           img.redraw && el("span", { class: "badge" }, "✓ новый"),
           el("img", { src: img.thumb, alt: "", title: "Открыть: посмотреть, перерисовать, скачать", onclick: () => openViewer(host, img.id) }),
-          el("figcaption", {}, `стр. ${pagePath}`),
+          el(
+            "figcaption",
+            {},
+            el(
+              "a",
+              { href: "#", title: `Открыть страницу с этим кадром: ${prettyUrl(img.page)}`, onclick: (e) => (e.preventDefault(), ipc.openExternal(img.page)) },
+              `стр. ${pagePath} ↗`,
+            ),
+          ),
         ),
       );
     }
@@ -472,7 +639,18 @@ function renderRetry() {
   $("retry-failed").textContent = `Повторить сайты с ошибками (${n})`;
 }
 
+$("pick-all").addEventListener("change", (e) => {
+  for (const { host } of state.hosts) {
+    if (state.filter && verdictOf(host) !== state.filter) continue;
+    e.target.checked ? state.selected.add(host) : state.selected.delete(host);
+  }
+  render();
+});
+
 function render() {
+  // A domain taken off the list is not ticked any more.
+  const listed = new Set(state.hosts.map((h) => h.host));
+  for (const h of state.selected) if (!listed.has(h)) state.selected.delete(h);
   renderChips();
   renderRetry();
   const rows = [];
@@ -498,9 +676,35 @@ function render() {
         },
         el(
           "td",
+          { class: "pick", onclick: (e) => e.stopPropagation() },
+          el("input", {
+            type: "checkbox",
+            "aria-label": `Выбрать ${label}`,
+            checked: state.selected.has(host),
+            onchange: (e) => {
+              e.target.checked ? state.selected.add(host) : state.selected.delete(host);
+              render();
+            },
+          }),
+        ),
+        el(
+          "td",
           {},
           el("span", { class: "caret" }, expandable ? (isOpen ? "▾" : "▸") : ""),
           el("span", { class: "site-name" }, label),
+          el(
+            "button",
+            {
+              class: "open-site",
+              title: "Открыть сайт в браузере",
+              "aria-label": `Открыть ${label} в браузере`,
+              onclick: (e) => {
+                e.stopPropagation();
+                ipc.openExternal(`https://${host}/`);
+              },
+            },
+            "↗",
+          ),
           note ? el("div", { class: "note" }, note) : null,
         ),
         el("td", {}, el("span", { class: `tag ${v}` }, VERDICT[v])),
@@ -512,9 +716,16 @@ function render() {
         el("td", { class: "act" }, rowAction(host, r)),
       ),
     );
-    if (isOpen) rows.push(el("tr", { class: "details" }, el("td", { colspan: "8" }, thumbGrid(host, r))));
+    if (isOpen) rows.push(el("tr", { class: "details" }, el("td", { colspan: "9" }, thumbGrid(host, r))));
   }
   $("rows").replaceChildren(...rows);
+  // Header box: all visible rows ticked / some / none.
+  const visible = state.hosts.filter(({ host }) => !state.filter || verdictOf(host) === state.filter).map((h) => h.host);
+  const ticked = visible.filter((h) => state.selected.has(h)).length;
+  $("pick-all").checked = visible.length > 0 && ticked === visible.length;
+  $("pick-all").indeterminate = ticked > 0 && ticked < visible.length;
+  $("pick-all").disabled = visible.length === 0;
+  renderBatchBar();
   $("empty").hidden = rows.length > 0;
   $("empty").textContent = state.hosts.length ? "Нет сайтов с таким итогом." : "Пока ничего не проверено.";
 }
@@ -609,8 +820,11 @@ function setViewerBusy(on) {
   $("viewer-redraw").textContent = on ? "Отменить" : currentImage()?.redraw ? "Перерисовать ещё раз" : "Перерисовать";
   $("viewer-redraw").classList.toggle("primary", !on);
   $("viewer-redraw").classList.toggle("danger", on);
-  $("viewer-prev").disabled = on || $("viewer-prev").disabled;
-  $("viewer-next").disabled = on || $("viewer-next").disabled;
+  // Off while drawing; back on by position — not by the state "on" left behind.
+  const list = viewerList();
+  const pos = list.findIndex((x) => x.id === viewer.id);
+  $("viewer-prev").disabled = on || pos <= 0;
+  $("viewer-next").disabled = on || pos >= list.length - 1;
 }
 
 $("viewer-redraw").addEventListener("click", async () => {
@@ -624,9 +838,12 @@ $("viewer-redraw").addEventListener("click", async () => {
   setViewerBusy(true);
   $("viewer-save").disabled = true;
   $("viewer-new-wait").hidden = false;
-  $("viewer-new-wait").textContent = "Рисую новый кадр… обычно 20–60 секунд. Можно отменить или закрыть окно.";
+  clearInterval(drawClock.timer);
+  drawClock.timer = null;
+  showStep("Начинаю…");
   $("viewer-new").removeAttribute("src");
-  setStatus("viewer-status", "");
+  // Said once for the whole drawing, not repeated with every step.
+  setStatus("viewer-status", "Можно отменить или закрыть окно — рисование остановится.");
   const res = await ipc.redrawImage(viewer.host, id, $("viewer-prompt").value);
   setViewerBusy(false);
   if (viewer.id !== id || $("viewer").hidden) return; // the user moved on
@@ -640,8 +857,28 @@ $("viewer-redraw").addEventListener("click", async () => {
   setStatus("viewer-status", "Готово. Не нравится — поправьте описание и перерисуйте.", "ok");
 });
 
+// The step in words plus the time since the start: a slow model is seen working, not hung.
+const drawClock = { started: 0, step: "", timer: null };
+function showStep(step) {
+  drawClock.step = step;
+  if (!drawClock.timer) {
+    drawClock.started = Date.now();
+    drawClock.timer = setInterval(renderStep, 1000);
+  }
+  renderStep();
+}
+function renderStep() {
+  if (!viewer.busy) {
+    clearInterval(drawClock.timer);
+    drawClock.timer = null;
+    return;
+  }
+  const sec = Math.floor((Date.now() - drawClock.started) / 1000);
+  $("viewer-new-wait").textContent = `${drawClock.step} · ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+}
+
 ipc.onImageStep(({ id, step }) => {
-  if (viewer.busy && viewer.id === id) $("viewer-new-wait").textContent = `${step} Можно отменить или закрыть окно.`;
+  if (viewer.busy && viewer.id === id) showStep(step);
 });
 
 $("viewer-save").addEventListener("click", async () => {
@@ -713,7 +950,7 @@ $("studio-go").addEventListener("click", async () => {
     return;
   }
   setStudioBusy(true);
-  setStatus("studio-status", "Рисую… обычно 20–60 секунд.");
+  setStatus("studio-status", "");
   const res = await ipc.studioGenerate({ refId: studio.refId, prompt: $("studio-prompt").value, aspect: $("studio-aspect").value });
   setStudioBusy(false);
   if (res.error) {
@@ -795,6 +1032,7 @@ $("update-open").addEventListener("click", () => updateUrl && ipc.openExternal(u
   $("version").textContent = `версия ${s.version}`;
   keys.providers = s.providers;
   keys.settings = s.settings;
+  keys.drawModels = s.drawModels;
   keys.defaultRules = s.defaultRedrawRules;
   $("provider").replaceChildren(...s.providers.map((p) => el("option", { value: p.id }, p.label)));
   $("provider").value = s.settings.provider;

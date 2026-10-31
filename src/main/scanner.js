@@ -1,7 +1,9 @@
 "use strict";
 
 const { BrowserWindow, session } = require("electron");
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const crypto = require("node:crypto");
+const dns = require("node:dns").promises;
 const sharp = require("sharp");
 const { collectScript } = require("./page-collector");
 const { extractFromHtml, extractFromCss, extractFromSitemap } = require("./html-collector");
@@ -87,13 +89,65 @@ function scanSession(id) {
  * certificates allowed). Electron leaves `res.url` empty, so `finalUrl` is
  * the requested one. No Referer: Chromium cancels a cross-site one as invalid.
  */
-async function get(ses, url, { signal, timeout = PAGE_TIMEOUT, accept = "*/*" } = {}) {
+// One server, many sites: a company keeps its landing pages on one shared
+// hosting, and dozens of requests a second from one address made the hoster's
+// anti-DDoS drop us (2026-10-31: 17 of 35 sites on one server "did not answer",
+// then even ping failed). Every request to a server takes a slot of that
+// server and keeps a gap after the previous one. Big CDNs are not limited.
+const PER_SERVER = 6;
+const SERVER_GAP_MS = 100; // ≤ 10 new requests a second per server
+const CDN = /(?:^|\.)(?:tildacdn\.[a-z]+|wixstatic\.com|parastorage\.com|cloudfront\.net|akamaized\.net|fastly\.net|googleusercontent\.com|gstatic\.com|cdninstagram\.com|userapi\.com|vk\.me|yandex\.net|cdnvideo\.ru)$/i;
+const serverOf = new Map(); // hostname → Promise<IP or hostname>
+const servers = new Map(); // IP → { run, next }
+
+function serverKey(hostname) {
+  if (!serverOf.has(hostname)) {
+    serverOf.set(
+      hostname,
+      dns.lookup(hostname).then(
+        (r) => r.address,
+        () => hostname,
+      ),
+    );
+  }
+  return serverOf.get(hostname);
+}
+
+async function politely(url, fn) {
+  let hostname;
+  try {
+    hostname = new URL(url).hostname;
+  } catch {
+    return fn();
+  }
+  if (CDN.test(hostname)) return fn();
+  const key = await serverKey(hostname);
+  if (!servers.has(key)) servers.set(key, { run: createLimiter(PER_SERVER), next: 0 });
+  const server = servers.get(key);
+  return server.run(async () => {
+    const wait = server.next - Date.now();
+    server.next = Math.max(Date.now(), server.next) + SERVER_GAP_MS;
+    if (wait > 0) await sleep(wait);
+    return fn();
+  });
+}
+
+async function get(ses, url, opts = {}) {
+  return politely(url, () => fetchNow(ses, url, opts));
+}
+
+async function fetchNow(ses, url, { signal, timeout = PAGE_TIMEOUT, accept = "*/*" } = {}) {
   const res = await ses.fetch(url, {
     signal: AbortSignal.any([signal, AbortSignal.timeout(timeout)]),
     headers: { "User-Agent": UA, Accept: accept, "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.5" },
     redirect: "follow",
   });
   res.finalUrl = res.url || url;
+  // The body is read inside the server's slot: a slot freed at the headers
+  // would let the next requests pile onto a server still sending this one.
+  if (Number(res.headers.get("content-length") ?? 0) > MAX_BYTES) throw new Error("слишком большой файл");
+  const body = Buffer.from(await res.arrayBuffer());
+  res.arrayBuffer = async () => body;
   return res;
 }
 
@@ -174,7 +228,6 @@ function imageBag() {
   };
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Home page over https, then http. A failure carries `http` (status) or a network code. */
 async function openHome(host, ses, signal) {
@@ -338,13 +391,19 @@ async function loadPage(win, url) {
 
 /** The slow way for script-drawn sites and anti-bot walls: a hidden browser, a few pages. */
 async function collectByBrowser(host, ses, signal, onStep) {
+  // Stop pressed while this site waited for a browser: do not even open one.
+  if (signal.aborted) throw signal.reason;
   const bag = imageBag();
   const win = openWindow(ses);
   const deadline = AbortSignal.any([signal, AbortSignal.timeout(COLLECT_DEADLINE)]);
+  // Stop cuts the page being loaded, not only the next one.
+  const onStop = () => !win.isDestroyed() && win.webContents.stop();
+  signal.addEventListener("abort", onStop, { once: true });
   try {
     let home;
     let lastError;
     for (const scheme of ["https", "http"]) {
+      if (signal.aborted) throw signal.reason;
       try {
         const status = await loadPage(win, `${scheme}://${host}/`);
         if (status >= 400) throw Object.assign(new Error(`сайт ответил ошибкой ${status}`), { http: status });
@@ -388,6 +447,7 @@ async function collectByBrowser(host, ses, signal, onStep) {
     if (signal.aborted) throw signal.reason;
     return { images: bag.images, pages, partial: deadline.aborted || seen.size >= BROWSER_PAGES };
   } finally {
+    signal.removeEventListener("abort", onStop);
     if (!win.isDestroyed()) win.destroy();
   }
 }
@@ -484,12 +544,20 @@ function createScan({ creds, signal, onSite, onProgress, cacheFile, classifyImag
   }
 
   async function scanSite(host) {
-    const started = Date.now();
     const result = { host, pages: 0, images: 0, people: [], unsure: [], unchecked: 0, error: null, note: null };
-    const step = (s) => onProgress({ host, step: s });
+    // Frame checks outlive a site that hit its deadline (they are shared and
+    // cached); once the site is reported, they must not say "working" for it.
+    let reported = false;
+    const step = (s) => {
+      if (!reported && !stop.aborted) onProgress({ host, step: s });
+    };
+    let timer;
     try {
       step("открываю сайт");
       const { images, pages, partial } = await collect(host, step);
+      // The clock starts once the pages are read: reading is capped on its own,
+      // and a wait for a free browser must not eat the frames' time.
+      const started = Date.now();
       result.pages = pages;
       const list = [...images.values()];
       let done = 0;
@@ -501,8 +569,12 @@ function createScan({ creds, signal, onSite, onProgress, cacheFile, classifyImag
         }),
       );
       const late = Symbol("late");
-      const timer = sleep(Math.max(0, SITE_DEADLINE - (Date.now() - started))).then(() => late);
-      const settled = await Promise.all(outcomes.map((p) => Promise.race([p, timer])));
+      const deadline = new Promise((r) => {
+        timer = setTimeout(() => r(late), Math.max(0, SITE_DEADLINE - (Date.now() - started)));
+      });
+      // Stop answers at once, not when the slowest frame gives up.
+      const stopped = new Promise((r) => (stop.aborted ? r(late) : stop.addEventListener("abort", () => r(late), { once: true })));
+      const settled = await Promise.all(outcomes.map((p) => Promise.race([p, deadline, stopped])));
       if (stop.aborted) return; // stopped mid-site — leave it for the next run
       let lateCount = 0;
       settled.forEach((out, i) => {
@@ -538,6 +610,9 @@ function createScan({ creds, signal, onSite, onProgress, cacheFile, classifyImag
     } catch (e) {
       if (stop.aborted) return;
       result.error = friendlyError(e);
+    } finally {
+      clearTimeout(timer);
+      reported = true;
     }
     result.verdict = verdictOf(result);
     result.checkedAt = new Date().toISOString();

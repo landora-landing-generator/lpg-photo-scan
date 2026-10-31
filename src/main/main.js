@@ -1,14 +1,15 @@
 "use strict";
 
 const path = require("node:path");
+const { createLimiter } = require("./limit");
 const fs = require("node:fs");
 const { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme } = require("electron");
 const sharp = require("sharp");
 const { createScan } = require("./scanner");
 const { parseDomains, displayHost, displayUrl } = require("./domains");
-const { checkKey, providerList, FatalKeyError } = require("./providers");
+const { checkKey, providerList, FatalKeyError, PROVIDERS, drawModelsFor, findDrawModel, catalogDrawModels } = require("./providers");
 const { writeExcel } = require("./excel");
-const { loadSettings, saveSettings, credsFor, loadState, saveState, findImage } = require("./store");
+const { loadSettings, saveSettings, updateDrawList, setDrawModel, loadCatalogs, saveCatalog, credsFor, loadState, saveState, findImage } = require("./store");
 const { originalPreview, redrawPreview, redrawImage, exportOne, exportSite } = require("./redraw");
 const { baseName } = require("./redraw-names");
 const { domainsFromFile } = require("./import");
@@ -24,11 +25,15 @@ sharp.concurrency(1);
 
 let win = null;
 let running = null; // { ctrl, scan } of the scan in progress
-let redrawing = null; // AbortController of a site-wide redraw
+let redrawing = null; // AbortController of a batch redraw (checkboxes)
 const jobs = { viewer: null, studio: null }; // AbortController of a single drawing per window part
 
-/** A service that never answers must not hang the button forever. */
-const DRAW_TIMEOUT = 180_000;
+/**
+ * A service that never answers must not hang the button forever. Longer than
+ * the drawing's own 5-minute deadline (draw.js) plus describing the old frame.
+ */
+const DRAW_TIMEOUT = 8 * 60_000;
+const DRAW_TIMEOUT_TEXT = "Сервис не ответил за 8 минут. Попробуйте ещё раз или выберите другую модель.";
 
 /** Runs one drawing job that the user can cancel; turns abort/timeout into plain words. */
 async function cancellable(slot, fn) {
@@ -40,7 +45,7 @@ async function cancellable(slot, fn) {
     return await fn(signal);
   } catch (e) {
     if (ctrl.signal.aborted) return { error: "Отменено.", cancelled: true };
-    if (signal.aborted) return { error: "Сервис не ответил за 3 минуты. Попробуйте ещё раз или выберите другой сервис." };
+    if (signal.aborted) return { error: DRAW_TIMEOUT_TEXT };
     return { error: e.message || String(e) };
   } finally {
     if (jobs[slot] === ctrl) jobs[slot] = null;
@@ -59,6 +64,8 @@ function createWindow() {
   });
   win.removeMenu?.();
   win.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
+  // The window shows the last list at once; the fresh catalog replaces it when it arrives.
+  win.webContents.once("did-finish-load", () => refreshCatalog(loadSettings().provider));
   // Links in the window open in the user's browser, never inside the app.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//.test(url)) shell.openExternal(url);
@@ -115,8 +122,37 @@ const guarded =
 
 // ---------- state, keys ----------
 
+/** Settings plus each service's drawing-model list as the user shaped it. */
+function settingsView() {
+  const settings = loadSettings();
+  const catalogs = loadCatalogs();
+  const drawModels = Object.fromEntries(
+    Object.keys(PROVIDERS).map((id) => [id, drawModelsFor(id, settings.drawLists[id], catalogs[id]?.models)]),
+  );
+  return { settings, drawModels };
+}
+
+/** Each service's list as the user shaped it, over the catalog in force. */
+const listOf = (provider) => drawModelsFor(provider, loadSettings().drawLists[provider], loadCatalogs()[provider]?.models);
+
+/**
+ * Downloads the service's drawing models: new ones appear in the list, gone
+ * ones leave it. Runs at start and after a key is saved; a failure keeps the
+ * last catalog (or the built-in list) and says nothing — drawing still works.
+ */
+async function refreshCatalog(provider) {
+  const apiKey = loadSettings().keys[provider];
+  if (!apiKey) return;
+  try {
+    saveCatalog(provider, await catalogDrawModels({ provider, apiKey }));
+    send("draw-models:changed", settingsView());
+  } catch {
+    /* offline or the service is down — keep what we have */
+  }
+}
+
 ipcMain.handle("state:get", () => ({
-  settings: loadSettings(),
+  ...settingsView(),
   providers: providerList(),
   defaultRedrawRules: DEFAULT_REDRAW_RULES,
   version: app.getVersion(),
@@ -129,20 +165,58 @@ ipcMain.handle(
   guarded(async (_e, { provider, key, models, redrawRules }) => {
     const apiKey = String(key ?? "").trim();
     saveSettings({ provider, key: apiKey, models, redrawRules });
+    if (apiKey) refreshCatalog(provider);
     return apiKey ? checkKey({ provider, apiKey }) : { ok: false, message: "Вставьте ключ." };
   }),
 );
 
 /** The drawing model picked in the viewer or studio — remembered for next time. */
-ipcMain.handle("settings:draw-model", (_e, model) => {
-  const s = loadSettings();
-  saveSettings({
-    provider: s.provider,
-    key: s.keys[s.provider] ?? "",
-    models: { ...s.models, draw: String(model ?? "").trim() },
-    redrawRules: s.redrawRules,
-  });
-});
+ipcMain.handle("settings:draw-model", (_e, model) => setDrawModel(model));
+
+/** A model typed by the user joins the list only if the service's catalog says it draws. */
+ipcMain.handle(
+  "draw-models:add",
+  guarded(async (_e, { provider, id }) => {
+    const apiKey = loadSettings().keys[provider];
+    if (!apiKey) throw new Error("Сначала вставьте ключ этого сервиса и нажмите «Сохранить».");
+    const model = await findDrawModel({ provider, apiKey }, id);
+    const preset = (loadCatalogs()[provider]?.models ?? PROVIDERS[provider].drawModels).some((m) => m.id === model.id);
+    updateDrawList(provider, (l) => ({
+      added: preset || l.added.some((m) => m.id === model.id) ? l.added : [...l.added, model],
+      removed: l.removed.filter((x) => x !== model.id),
+    }));
+    return { ...settingsView(), added: model };
+  }),
+);
+
+ipcMain.handle(
+  "draw-models:remove",
+  guarded(async (_e, { provider, id }) => {
+    const before = listOf(provider);
+    if (before.length <= 1) throw new Error("Последнюю модель убрать нельзя — рисовать будет нечем.");
+    updateDrawList(provider, (l) => ({
+      added: l.added.filter((m) => m.id !== id),
+      removed: [...new Set([...l.removed, id])],
+    }));
+    // The model in use went away: the first one left takes its place.
+    const s = loadSettings();
+    if (s.provider === provider && (s.models.draw || PROVIDERS[provider].drawModel) === id) {
+      setDrawModel(listOf(provider)[0].id);
+    }
+    return settingsView();
+  }),
+);
+
+ipcMain.handle(
+  "draw-models:reset",
+  guarded(async (_e, { provider }) => {
+    updateDrawList(provider, null);
+    const s = loadSettings();
+    const list = listOf(provider);
+    if (s.provider === provider && s.models.draw && !list.some((m) => m.id === s.models.draw)) setDrawModel("");
+    return settingsView();
+  }),
+);
 
 ipcMain.handle("url:display", (_e, urls) => urls.map(displayUrl));
 
@@ -207,6 +281,7 @@ function saveSiteResult(result) {
 ipcMain.handle("scan:start", async (_e, { domainsText, again, hosts: only }) => {
   if (running) {
     if (!only?.length) return { error: "Проверка уже идёт." };
+    if (running.ctrl.signal.aborted) return { error: "Проверка останавливается — нажмите ещё раз через пару секунд." };
     const added = running.scan.add(only);
     if (added) send("scan:more", { added, hosts: only });
     return { ok: true, added };
@@ -235,7 +310,12 @@ ipcMain.handle("scan:start", async (_e, { domainsText, again, hosts: only }) => 
   });
   running = { ctrl, scan };
   send("scan:begin", { total: todo.length, hosts: todo });
-  scan.add(todo);
+  // Nothing queued would leave `done` unsettled and block every later scan.
+  if (!scan.add(todo)) {
+    running = null;
+    send("scan:end", { stopped: false, fatal: null });
+    return { ok: true };
+  }
   let fatal = null;
   try {
     await scan.done;
@@ -279,53 +359,82 @@ ipcMain.handle(
 );
 
 ipcMain.handle(
-  "site:save",
-  guarded(async (_e, { host }) => {
+  "sites:save",
+  guarded(async (_e, { hosts }) => {
+    const results = loadState().results;
+    const ready = hosts.filter((h) => imagesOfResult(results[h]).some((img) => img.redraw));
+    if (!ready.length) return { error: "У выбранных сайтов ещё нет перерисованных кадров." };
     const { canceled, filePaths } = await dialog.showOpenDialog(win, {
-      title: "Куда сохранить новые кадры сайта",
+      title: ready.length > 1 ? `Куда сохранить новые кадры ${ready.length} сайтов` : "Куда сохранить новые кадры сайта",
       defaultPath: app.getPath("downloads"),
       properties: ["openDirectory", "createDirectory"],
     });
     if (canceled || !filePaths?.[0]) return { saved: false };
-    const { dir, count } = exportSite(host, filePaths[0]);
-    shell.openPath(dir);
-    return { saved: true, dir, count };
+    let count = 0;
+    for (const host of ready) count += exportSite(host, filePaths[0]).count;
+    // One site: its own folder; several: the folder that holds them all.
+    shell.openPath(ready.length === 1 ? path.join(filePaths[0], ready[0]) : filePaths[0]);
+    return { saved: true, sites: ready.length, count };
   }),
 );
 
-ipcMain.handle("site:redraw-stop", () => redrawing?.abort(new Error("stopped")));
+ipcMain.handle("redraw:stop", () => redrawing?.abort(new Error("stopped")));
 
-/** Redraws, one by one, every image with people on a site that has no new version yet. */
+const imagesOfResult = (r) => [...(r?.people ?? []), ...(r?.unsure ?? [])];
+
+/** Drawings of a batch at once: the services draw in parallel, three keeps rate limits calm. */
+const BATCH_DRAWS = 3;
+
+/**
+ * Redraws a batch of frames picked with checkboxes — on one site or across
+ * several. Frames that already have a new version are skipped. A bad key or an
+ * empty balance stops the batch; any other failure is counted and the rest go on.
+ */
 ipcMain.handle(
-  "site:redraw",
-  guarded(async (_e, { host }) => {
+  "redraw:batch",
+  guarded(async (_e, { items }) => {
     if (redrawing) return { error: "Перерисовка уже идёт." };
-    const r = loadState().results[host];
-    const todo = (r?.people ?? []).filter((img) => !img.redraw);
-    if (!todo.length) return { error: "Все кадры с людьми на этом сайте уже перерисованы." };
-    redrawing = new AbortController();
+    const results = loadState().results;
+    const todo = (items ?? []).filter(({ host, id }) => {
+      const img = findImage({ results }, host, id);
+      return img && !img.redraw;
+    });
+    if (!todo.length) return { error: "Все выбранные кадры уже перерисованы." };
+    const ctrl = new AbortController();
+    redrawing = ctrl;
+    const hosts = [...new Set(todo.map((t) => t.host))];
     let done = 0;
     const errors = [];
+    let fatal = null;
+    const progress = (finished = false) => send("redraw:progress", { hosts, done, total: todo.length, finished });
+    progress();
+    const run = createLimiter(BATCH_DRAWS);
     try {
-      for (const img of todo) {
-        if (redrawing.signal.aborted) break;
-        send("site:redraw-progress", { host, done, total: todo.length });
-        try {
-          const updated = await redrawImage(host, img.id, {
-            signal: AbortSignal.any([redrawing.signal, AbortSignal.timeout(DRAW_TIMEOUT)]),
-          });
-          send("image:updated", { host, image: updated });
-        } catch (e) {
-          if (e instanceof FatalKeyError) throw e;
-          if (!redrawing.signal.aborted) errors.push(e.message);
-        }
-        done++;
-      }
+      await Promise.all(
+        todo.map(({ host, id }) =>
+          run(async () => {
+            if (ctrl.signal.aborted) return;
+            const cap = AbortSignal.timeout(DRAW_TIMEOUT);
+            try {
+              const updated = await redrawImage(host, id, { signal: AbortSignal.any([ctrl.signal, cap]) });
+              send("image:updated", { host, image: updated });
+            } catch (e) {
+              if (e instanceof FatalKeyError) {
+                fatal = e.message;
+                ctrl.abort(e);
+              } else if (!ctrl.signal.aborted) errors.push(cap.aborted ? DRAW_TIMEOUT_TEXT : e.message);
+            }
+            done++;
+            progress();
+          }),
+        ),
+      );
     } finally {
       redrawing = null;
-      send("site:redraw-progress", { host, done, total: todo.length, finished: true });
+      progress(true);
     }
-    return { done, total: todo.length, errors };
+    if (fatal) return { error: fatal };
+    return { done: done - errors.length, total: todo.length, errors, stopped: ctrl.signal.aborted };
   }),
 );
 

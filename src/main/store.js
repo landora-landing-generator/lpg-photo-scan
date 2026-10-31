@@ -68,7 +68,32 @@ function loadSettings() {
     keys,
     models: { recognize: s.models?.recognize ?? "", draw: s.models?.draw ?? "" },
     redrawRules: s.redrawRules ?? "",
+    // Per service: { added: [{ id, label }], removed: [id] } over the built-in drawing models.
+    drawLists: s.drawLists ?? {},
   };
+}
+
+/** Changes the user's drawing-model list of one service; null resets it to the built-in one. */
+function updateDrawList(provider, fn) {
+  const s = readJson("settings.json", {});
+  s.drawLists ??= {};
+  const next = fn ? fn({ added: [], removed: [], ...s.drawLists[provider] }) : null;
+  if (next) s.drawLists[provider] = next;
+  else delete s.drawLists[provider];
+  writeJson("settings.json", s);
+}
+
+/** Last downloaded drawing-model catalog per service: { [provider]: { at, models } }. */
+const loadCatalogs = () => readJson("draw-catalog.json", {});
+function saveCatalog(provider, models) {
+  writeJson("draw-catalog.json", { ...loadCatalogs(), [provider]: { at: new Date().toISOString(), models } });
+}
+
+/** The drawing model of the saved service; written as is (empty = the service default). */
+function setDrawModel(model) {
+  const s = readJson("settings.json", {});
+  s.models = { recognize: s.models?.recognize ?? "", draw: String(model ?? "").trim() };
+  writeJson("settings.json", s);
 }
 
 function saveSettings({ provider, key, models, redrawRules }) {
@@ -117,6 +142,10 @@ const redrawDir = (host) => path.join(app.getPath("userData"), "redraws", host);
 module.exports = {
   loadSettings,
   saveSettings,
+  updateDrawList,
+  loadCatalogs,
+  saveCatalog,
+  setDrawModel,
   credsFor,
   redrawRules,
   loadState,

@@ -49,7 +49,7 @@ const dataUrl = (jpeg) => `data:image/jpeg;base64,${jpeg.toString("base64")}`;
 async function drawOpenRouter(p, model, apiKey, prompt, size, signal, reference) {
   const res = await fetch(`${p.base}/images`, {
     method: "POST",
-    signal: AbortSignal.any([AbortSignal.timeout(150_000), ...(signal ? [signal] : [])]),
+    signal,
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model,
@@ -97,7 +97,13 @@ async function drawOpenAi(p, model, apiKey, prompt, size, signal, reference) {
   return Buffer.from(b64, "base64");
 }
 
-/** Per-call limit: one hung HTTP call must not eat the whole job's time. */
+/**
+ * The whole drawing may take this long: some models (Seedream, Chinese ones on
+ * polza) need minutes, and a per-request cap of one minute failed them.
+ */
+const DRAW_DEADLINE = 5 * 60_000;
+
+/** Per-poll limit: one hung status call must not eat the whole job's time. */
 const CALL_TIMEOUT = 60_000;
 const callSignal = (signal) => AbortSignal.any([AbortSignal.timeout(CALL_TIMEOUT), ...(signal ? [signal] : [])]);
 
@@ -116,6 +122,8 @@ function polzaResult(job) {
   }
   return null;
 }
+
+const POLZA_WORKING = new Set(["pending", "queued", "processing", "in_progress", "running", "starting", "created", "waiting"]);
 
 /**
  * polza.ai Media API: create the job in async mode (the default sync mode holds
@@ -138,7 +146,7 @@ async function drawPolza(p, model, apiKey, prompt, size, signal, reference) {
   for (;;) {
     res = await fetch(`${p.base}/media`, {
       method: "POST",
-      signal: callSignal(signal),
+      signal,
       headers,
       body: JSON.stringify({ model, input, async: true }),
     });
@@ -147,11 +155,16 @@ async function drawPolza(p, model, apiKey, prompt, size, signal, reference) {
     if (!unsupported) break;
     delete input[unsupported];
   }
+  if (res.status === 400 && /не медиа-модель|not a media model/i.test(body)) {
+    throw new Error(`Модель ${model} не рисует картинки — выберите модель рисования из списка.`);
+  }
   if (!res.ok) throw httpError(p, res.status, body);
   let job = JSON.parse(body);
-  while (job.status !== "completed") {
-    if (job.status === "failed" || job.status === "cancelled") {
-      const why = job.error?.message ?? job.error ?? "без объяснения";
+  // Poll only while polza says the job is still on its way; an answer that
+  // already holds the picture, or a status we do not know, ends the loop.
+  while (job.status !== "completed" && !polzaResult(job)) {
+    if (!POLZA_WORKING.has(String(job.status ?? "").toLowerCase()) || !job.id) {
+      const why = job.error?.message ?? job.error ?? `статус «${job.status ?? "нет"}»`;
       throw new Error(`polza.ai не нарисовал кадр: ${typeof why === "string" ? why : JSON.stringify(why)}`);
     }
     await new Promise((r) => setTimeout(r, 3000));
@@ -174,9 +187,20 @@ async function drawPolza(p, model, apiKey, prompt, size, signal, reference) {
 async function drawImage({ provider, apiKey, model }, prompt, size, { signal, reference } = {}) {
   const p = providerOf(provider);
   const m = model || p.drawModel;
-  if (provider === "openrouter") return drawOpenRouter(p, m, apiKey, prompt, size, signal, reference);
-  if (provider === "openai") return drawOpenAi(p, m, apiKey, prompt, size, signal, reference);
-  return drawPolza(p, m, apiKey, prompt, size, signal, reference);
+  const deadline = AbortSignal.timeout(DRAW_DEADLINE);
+  const job = AbortSignal.any([deadline, ...(signal ? [signal] : [])]);
+  const draw = { openrouter: drawOpenRouter, openai: drawOpenAi, polza: drawPolza }[provider] ?? drawPolza;
+  try {
+    return await draw(p, m, apiKey, prompt, size, job, reference);
+  } catch (e) {
+    if (e?.name !== "TimeoutError" || signal?.aborted) throw e;
+    // Never the browser's English "operation was aborted due to timeout".
+    throw new Error(
+      deadline.aborted
+        ? `Модель ${m} не нарисовала кадр за ${DRAW_DEADLINE / 60_000} минут — нажмите ещё раз или выберите модель побыстрее.`
+        : `${p.label} не ответил за минуту — нажмите ещё раз.`,
+    );
+  }
 }
 
 module.exports = { drawImage, aspectRatioFor, openAiSize, polzaResult };

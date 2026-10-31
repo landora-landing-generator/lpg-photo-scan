@@ -62,6 +62,20 @@
               <button id="rules-reset">Вернуть как было</button>
               <span class="hint">Изменения применятся после «Сохранить».</span>
             </div>
+            <h3 class="sub">Модели рисования</h3>
+            <p class="tip">
+              Из этого списка выбирается модель в окне кадра и в «Нарисовать кадр». Список берётся из каталога
+              сервиса при каждом запуске: новые рисующие модели появляются сами, снятые с сервиса — уходят.
+              Лишние уберите крестиком — они не вернутся. Модель, которой нет в списке, впишите так, как она
+              названа в каталоге, — приложение проверит, что она рисует, и только тогда добавит.
+            </p>
+            <ul id="draw-model-list" class="model-list"></ul>
+            <div class="row">
+              <input id="draw-model-new" type="text" spellcheck="false" placeholder="Например qwen/image-2" aria-label="Название модели" />
+              <button id="draw-model-add">Добавить</button>
+              <button id="draw-model-reset" class="push-right">Вернуть убранные</button>
+            </div>
+            <p id="draw-model-status" class="status"></p>
           </details>
         </div>
       </details>
@@ -102,10 +116,13 @@
           </div>
         </div>
         <div id="chips" class="chips"></div>
+        <div id="batch" class="batch" hidden></div>
+        <p id="batch-status" class="status"></p>
         <div class="table-wrap">
         <table class="results">
           <thead>
             <tr>
+              <th class="pick"><input type="checkbox" id="pick-all" aria-label="Выбрать все сайты" title="Выбрать все сайты" /></th>
               <th>Сайт</th>
               <th>Итог</th>
               <th class="n">Лица</th>
@@ -144,7 +161,7 @@
                   <option value="9:16">Вертикальный 9:16</option>
                 </select>
                 <label for="studio-model" class="hint">Модель</label>
-            <input id="studio-model" class="draw-model" type="text" list="draw-models" spellcheck="false" aria-label="Модель рисования" title="Модель рисования: выберите из списка или впишите свою" />
+            <select id="studio-model" class="draw-model" aria-label="Модель рисования" title="Модель рисования. Список меняется в «Ключ» → «Настройки»"></select>
                 <button id="studio-clear" hidden>Убрать образец</button>
                 <button id="studio-go" class="primary push-right">Нарисовать</button>
               </div>
@@ -152,7 +169,7 @@
             </div>
           </div>
           <div id="studio-result" class="studio-result" hidden>
-            <div class="frame"><img id="studio-out" alt="" /><span id="studio-wait" hidden>Рисую… обычно 20–60 секунд</span></div>
+            <div class="frame"><img id="studio-out" alt="" /><span id="studio-wait" hidden>Рисую… обычно 20–60 секунд, медленные модели — до 5 минут</span></div>
             <div class="row between">
               <span id="studio-meta" class="hint"></span>
               <button id="studio-save">Скачать на компьютер</button>
@@ -195,7 +212,7 @@
           <span id="viewer-status" class="status"></span>
           <div class="row push-right">
             <label for="viewer-model" class="hint">Модель</label>
-            <input id="viewer-model" class="draw-model" type="text" list="draw-models" spellcheck="false" aria-label="Модель рисования" title="Модель рисования: выберите из списка или впишите свою" />
+            <select id="viewer-model" class="draw-model" aria-label="Модель рисования" title="Модель рисования. Список меняется в «Ключ» → «Настройки»"></select>
             <button id="viewer-save">Скачать на компьютер</button>
             <button id="viewer-redraw" class="primary">Перерисовать</button>
           </div>
@@ -227,8 +244,12 @@
         <h3>Полезно знать</h3>
         <ul>
           <li>Новый кадр — того же размера, что старый, уже сжат для сайта.</li>
-          <li>«Скачать новые кадры в папку» кладёт рядом файл replacements.csv — что на что менять.</li>
-          <li>Модель рисования меняется прямо в окне: выберите из списка или впишите свою.</li>
+          <li>Значок ↗ у названия сайта открывает сайт в браузере; подпись «стр. …» под кадром — страницу, где этот кадр стоит. Так можно глазами проверить, что нашла нейросеть.</li>
+          <li>Галочки слева от сайтов — выбрать несколько и разом проверить, перерисовать кадры с людьми или скачать новые кадры. Галочка в шапке таблицы выбирает все видимые сайты.</li>
+          <li>Галочки на кадрах внутри сайта — перерисовать только выбранные. Перерисовка идёт по три кадра сразу, её можно остановить.</li>
+          <li>«Скачать новые кадры» кладёт рядом файл replacements.csv — что на что менять. Несколько сайтов — каждый в свою папку.</li>
+          <li>Модель рисования выбирается прямо в окне кадра. Список моделей обновляется из каталога сервиса при каждом запуске; убрать лишние или добавить свою — в «Ключ» → «Настройки».</li>
+          <li>Медленные модели (Seedream, Qwen и другие) рисуют до 5 минут — счётчик времени в кадре показывает, что работа идёт.</li>
           <li>Сайты проверяются по несколько сразу; 100 сайтов — обычно 5–15 минут.</li>
           <li>«Заново» в строке сайта проверяет только его. Можно нажимать и во время проверки — сайт встанет в очередь.</li>
           <li>«Повторить сайты с ошибками» — ещё раз только те, что не открылись или где часть кадров не проверилась. Остальные не трогает.</li>
@@ -244,8 +265,6 @@
         <p class="hint">Разработчик — Андрей Цибин.</p>
       </div>
     </div>
-
-    <datalist id="draw-models"></datalist>
 
     <script src="app.js"></script>
   </body>

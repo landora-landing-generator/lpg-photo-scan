@@ -17,7 +17,14 @@ const VISION_SIDE = 768;
 async function original(host, id, signal) {
   const img = findImage(loadState(), host, id);
   if (!img) throw new Error("кадр не найден — проверьте сайт заново");
-  const raw = await downloadImage(img.url, signal ?? new AbortController().signal);
+  let raw;
+  try {
+    raw = await downloadImage(img.url, signal ?? new AbortController().signal);
+  } catch (e) {
+    if (signal?.aborted) throw e;
+    // Not the drawing service's fault: the site itself did not give the frame back.
+    throw new Error("сайт не отдал исходный кадр — откройте его в браузере: возможно, он сейчас не работает");
+  }
   const read = await readImage(raw);
   if (!read) throw new Error("картинка на сайте больше не открывается");
   return { img, buf: read.buf };
@@ -70,7 +77,7 @@ async function redrawImage(host, id, { prompt, signal, onStep = () => {} } = {})
     onStep("Описываю кадр…");
     text = await describeForRedraw(recognize, small, rules, { signal });
   }
-  onStep("Рисую новый кадр… обычно 20–60 секунд");
+  onStep("Рисую новый кадр… обычно 20–60 секунд, медленные модели — до 5 минут");
   // The rules ride along with every prompt — also with one the user typed.
   const drawn = await drawImage(draw, `${text}\n\n${rules}`, { width: img.width, height: img.height }, { signal });
   onStep("Сжимаю для сайта…");
@@ -78,9 +85,11 @@ async function redrawImage(host, id, { prompt, signal, onStep = () => {} } = {})
   fs.mkdirSync(redrawDir(host), { recursive: true });
   const file = `${id}.jpg`;
   fs.writeFileSync(path.join(redrawDir(host), file), web.buffer);
-  return updateImage(host, id, {
+  const updated = updateImage(host, id, {
     redraw: { file, prompt: text, width: web.width, height: web.height, bytes: web.bytes, at: new Date().toISOString() },
   });
+  if (!updated) throw new Error("Кадр пропал из результата — сайт перепроверили, пока шла перерисовка.");
+  return updated;
 }
 
 /** Copies one drawn frame to a path the user picked. */
