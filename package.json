@@ -1,7 +1,7 @@
 {
   "name": "lpg-photo-scan",
   "productName": "LPG Photo Scan",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Проверяет список сайтов и показывает, на каких есть фотографии людей",
   "private": true,
   "main": "src/main/main.js",

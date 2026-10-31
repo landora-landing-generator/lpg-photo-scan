@@ -19,15 +19,21 @@ function readJson(name, fallback) {
 function writeJson(name, data) {
   fs.mkdirSync(app.getPath("userData"), { recursive: true });
   const tmp = `${file(name)}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data));
+  // Only this user of the computer can read the folder's files: the API key is in settings.json.
+  fs.writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
   fs.renameSync(tmp, file(name));
 }
 
-const canEncrypt = () => safeStorage.isEncryptionAvailable();
-const seal = (key) => (canEncrypt() ? { enc: safeStorage.encryptString(key).toString("base64") } : { plain: key });
+// Windows encrypts silently (DPAPI). On a Mac the key would sit in the
+// keychain, and an ad-hoc signed app changes its signature with every version:
+// after each update macOS asks for the user's password. So on a Mac the key is
+// kept in the user-only settings file instead.
+const useOsEncryption = () => process.platform !== "darwin" && safeStorage.isEncryptionAvailable();
+const seal = (key) => (useOsEncryption() ? { enc: safeStorage.encryptString(key).toString("base64") } : { plain: key });
 function unseal(v) {
   if (!v) return "";
-  if (v.enc && canEncrypt()) {
+  // A Mac key sealed by 0.1.x–0.2.0 is read once more from the keychain, then moved to the file.
+  if (v.enc && (process.platform === "darwin" || useOsEncryption())) {
     try {
       return safeStorage.decryptString(Buffer.from(v.enc, "base64"));
     } catch {
@@ -41,12 +47,21 @@ function unseal(v) {
  * Settings: the one service the user works with, its key, and optional model
  * names for the two jobs (empty = the service's cheapest default). Keys of
  * other services stay remembered, so switching back does not lose a pasted
- * key. Keys are encrypted with the OS keychain when it is available.
+ * key. On Windows keys are encrypted by the OS; on a Mac see useOsEncryption.
  */
 function loadSettings() {
   const s = readJson("settings.json", {});
   const keys = {};
-  for (const [id, v] of Object.entries(s.keys ?? {})) keys[id] = unseal(v);
+  let moved = false;
+  for (const [id, v] of Object.entries(s.keys ?? {})) {
+    keys[id] = unseal(v);
+    if (v?.enc && process.platform === "darwin") {
+      if (keys[id]) s.keys[id] = { plain: keys[id] };
+      else delete s.keys[id];
+      moved = true;
+    }
+  }
+  if (moved) writeJson("settings.json", s);
   return {
     // "anthropic" was offered in 0.1.0 and dropped: it cannot draw.
     provider: ["openrouter", "polza", "openai"].includes(s.provider) ? s.provider : "openrouter",

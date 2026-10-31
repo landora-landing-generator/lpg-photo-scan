@@ -151,6 +151,8 @@ async function run() {
     if (size < 1000) throw new Error(`file ${size} B`);
   });
   await check("key storage", async () => {
+    // A Mac keeps the key in the user-only settings file: the keychain would ask for a password after each update.
+    if (process.platform === "darwin") return "user-only file";
     // Without OS encryption the key is kept in plain form — allowed, but say so.
     if (!safeStorage.isEncryptionAvailable()) return "encryption unavailable (plain storage)";
     const back = safeStorage.decryptString(safeStorage.encryptString("sk-test"));
