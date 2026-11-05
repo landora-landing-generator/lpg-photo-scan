@@ -10,7 +10,8 @@ const path = require("node:path");
 const { BrowserWindow, safeStorage } = require("electron");
 const sharp = require("sharp");
 const { readImage } = require("./decode");
-const { toWebJpeg } = require("./web-image");
+const { toWebJpeg, toWebCutout } = require("./web-image");
+const { backgroundKind } = require("./cutout");
 const http = require("node:http");
 const { collectScript } = require("./page-collector");
 const { createScan } = require("./scanner");
@@ -51,6 +52,31 @@ async function run() {
     const web = await toWebJpeg(png, { width: 1200, height: 800, bytes: 0 });
     if (web.width !== 1200 || web.height !== 800) throw new Error(`size ${web.width}x${web.height}`);
     return `${web.bytes} B`;
+  });
+  await check("cut-out: background test", async () => {
+    const svg = (bg) =>
+      Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="400" height="500">${bg}<ellipse cx="200" cy="260" rx="110" ry="190" fill="#2b4c8c"/></svg>`);
+    const clear = await sharp(svg("")).png().toBuffer();
+    const white = await sharp(svg('<rect width="400" height="500" fill="#fff"/>')).jpeg().toBuffer();
+    const kinds = [await backgroundKind(clear), await backgroundKind(white), await backgroundKind(png)];
+    if (kinds.join() !== "transparent,white,") throw new Error(`kinds ${kinds.join()}`);
+  });
+  await check("cut-out: background removal (onnxruntime + model)", async () => {
+    const t = Date.now();
+    const drawn = await sharp(
+      Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="800"><rect width="600" height="800" fill="#fff"/>' +
+          '<circle cx="300" cy="200" r="90" fill="#d9a07a"/><rect x="190" y="300" width="220" height="420" rx="60" fill="#2b4c8c"/></svg>',
+      ),
+    )
+      .png()
+      .toBuffer();
+    const web = await toWebCutout(drawn, { width: 600, height: 800, bytes: 0 }, "png");
+    const { data, info } = await sharp(web.buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const alpha = (x, y) => data[(y * info.width + x) * 4 + 3];
+    if (alpha(10, 10) > 40 || alpha(590, 790) > 40) throw new Error(`background kept: ${alpha(10, 10)}, ${alpha(590, 790)}`);
+    if (alpha(300, 500) < 200) throw new Error(`subject cut away: ${alpha(300, 500)}`);
+    return `${web.bytes} B, ${Date.now() - t} ms`;
   });
   await check("sharp: webp/avif/gif/tiff read", async () => {
     for (const fmt of ["webp", "avif", "gif", "tiff"]) {

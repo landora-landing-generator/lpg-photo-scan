@@ -14,4 +14,15 @@ const DEFAULT_REDRAW_RULES = [
   "Без текста, букв, цифр, логотипов и водяных знаков.",
 ].join(" ");
 
-module.exports = { DEFAULT_REDRAW_RULES };
+/**
+ * Added to the rules when the old frame is a cut-out (no background, or a plain
+ * white field): the new one must drop into the same design. It outranks the
+ * "same setting" rule above — a cut-out has no setting to keep.
+ */
+const CUTOUT_RULE = [
+  "Важно: на старом кадре фона нет — человек или предмет вырезан и вписан в дизайн страницы.",
+  "Новый кадр тоже без обстановки: тот же объект целиком, в той же позе и кадрировании,",
+  "на ровном чистом белом фоне (#FFFFFF), без пола, теней, стен и предметов вокруг. Это правило важнее правила про обстановку.",
+].join(" ");
+
+module.exports = { DEFAULT_REDRAW_RULES, CUTOUT_RULE };

@@ -468,6 +468,10 @@ button.small { height: 28px; padding: 0 10px; font-size: 13px; }
   padding: 8px;
 }
 .frame img { width: 100%; height: 100%; object-fit: contain; display: block; }
+/* A frame without a background: a checkerboard shows where it is transparent. */
+.frame.clear {
+  background: repeating-conic-gradient(var(--line) 0 25%, var(--bg) 0 50%) 0 0 / 16px 16px;
+}
 .frame img:not([src]) { display: none; }
 .frame span { padding: 0 16px; text-align: center; }
 

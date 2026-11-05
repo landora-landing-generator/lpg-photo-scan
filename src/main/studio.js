@@ -7,7 +7,9 @@ const { app } = require("electron");
 const sharp = require("sharp");
 const { readImage } = require("./decode");
 const { drawImage } = require("./draw");
-const { toWebJpeg } = require("./web-image");
+const { toWebJpeg, toWebCutout } = require("./web-image");
+const { backgroundKind } = require("./cutout");
+const { CUTOUT_RULE } = require("./prompts");
 const { credsFor, redrawRules } = require("./store");
 
 // "Нарисовать кадр": a frame from the user's own picture (used as a reference)
@@ -34,10 +36,11 @@ async function loadReference(file) {
   const base = () => sharp(read.buf, { animated: false }).rotate().flatten({ background: "#ffffff" });
   const jpeg = await base().resize(REF_SIDE, REF_SIDE, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 88 }).toBuffer();
   const preview = await base().resize(800, 800, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer();
+  const kind = await backgroundKind(read.buf).catch(() => null);
   const id = crypto.randomUUID();
   refs.clear(); // one reference at a time
-  refs.set(id, { jpeg, width: read.meta.width, height: read.meta.height });
-  return { id, preview: `data:image/jpeg;base64,${preview.toString("base64")}`, width: read.meta.width, height: read.meta.height };
+  refs.set(id, { jpeg, width: read.meta.width, height: read.meta.height, kind });
+  return { id, preview: `data:image/jpeg;base64,${preview.toString("base64")}`, width: read.meta.width, height: read.meta.height, kind };
 }
 
 /**
@@ -54,21 +57,37 @@ async function generate({ refId, prompt, aspect, signal }) {
 
   const size = ref ? { width: ref.width, height: ref.height } : { width: SIZES[aspect]?.[0] ?? 1600, height: SIZES[aspect]?.[1] ?? 1200 };
   const full = ref
-    ? [`Нарисуй новую фотографию по образцу на приложенной картинке.`, text, redrawRules()].filter(Boolean).join("\n\n")
+    ? [`Нарисуй новую фотографию по образцу на приложенной картинке.`, text, redrawRules(), ref.kind && CUTOUT_RULE]
+        .filter(Boolean)
+        .join("\n\n")
     : text;
   const drawn = await drawImage(draw, full, size, { reference: ref?.jpeg, signal });
-  const web = await toWebJpeg(drawn, { ...size, bytes: 0 });
+  // A transparent sample gets a transparent frame back; on failure — white.
+  let web = null;
+  if (ref?.kind === "transparent") web = await toWebCutout(drawn, { ...size, bytes: 0 }, "png").catch(() => null);
+  web ??= { ...(await toWebJpeg(drawn, { ...size, bytes: 0 })), format: "jpg" };
 
   fs.mkdirSync(studioDir(), { recursive: true });
-  const file = `frame-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.jpg`;
+  const file = `frame-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.${web.format}`;
   fs.writeFileSync(path.join(studioDir(), file), web.buffer);
   return {
     file,
-    preview: `data:image/jpeg;base64,${web.buffer.toString("base64")}`,
+    preview: `data:image/${web.format === "jpg" ? "jpeg" : web.format};base64,${web.buffer.toString("base64")}`,
     width: web.width,
     height: web.height,
     bytes: web.bytes,
   };
+}
+
+/** "Вырезать фон" on a studio result: a transparent PNG next to it. */
+async function cutoutStudio(file) {
+  const src = path.join(studioDir(), path.basename(file));
+  if (!fs.existsSync(src)) throw new Error("Файл не найден — нарисуйте кадр заново.");
+  const meta = await sharp(src).metadata();
+  const web = await toWebCutout(fs.readFileSync(src), { width: meta.width, height: meta.height, bytes: 0 }, "png");
+  const out = `${path.basename(file).replace(/\.[a-z]+$/i, "")}-cut.png`;
+  fs.writeFileSync(path.join(studioDir(), out), web.buffer);
+  return { file: out, preview: `data:image/png;base64,${web.buffer.toString("base64")}`, width: web.width, height: web.height, bytes: web.bytes };
 }
 
 /** Copies a studio result to where the user chose; refuses names outside the studio folder. */
@@ -78,4 +97,4 @@ function exportStudio(file, target) {
   fs.copyFileSync(src, target);
 }
 
-module.exports = { loadReference, generate, exportStudio, SIZES };
+module.exports = { loadReference, generate, exportStudio, SIZES, cutoutStudio };

@@ -7,7 +7,9 @@ const { downloadImage } = require("./scanner");
 const { readImage } = require("./decode");
 const { describeForRedraw } = require("./classify");
 const { drawImage } = require("./draw");
-const { toWebJpeg } = require("./web-image");
+const { toWebJpeg, toWebCutout, cutoutFormat } = require("./web-image");
+const { backgroundKind } = require("./cutout");
+const { CUTOUT_RULE } = require("./prompts");
 const { credsFor, redrawRules, loadState, findImage, updateImage, redrawDir } = require("./store");
 const { baseName } = require("./redraw-names");
 const { displayUrl } = require("./domains");
@@ -30,15 +32,21 @@ async function original(host, id, signal) {
   return { img, buf: read.buf };
 }
 
-/** The original as a data URL for the viewer (fetched with the page as referer — hotlink guards). */
+const MIME = { ".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp" };
+const mimeOf = (file) => MIME[path.extname(file).toLowerCase()] ?? "image/jpeg";
+
+/**
+ * The original as a data URL for the viewer (fetched with the page as referer —
+ * hotlink guards). A transparent original stays transparent (PNG), so the
+ * viewer can show that it has no background.
+ */
 async function originalPreview(host, id) {
   const { buf } = await original(host, id);
-  const jpeg = await sharp(buf, { animated: false })
-    .rotate()
-    .flatten({ background: "#ffffff" })
-    .resize(1400, 1400, { fit: "inside", withoutEnlargement: true })
-    .jpeg({ quality: 85 })
-    .toBuffer();
+  const img = sharp(buf, { animated: false }).rotate();
+  const { hasAlpha } = await img.metadata();
+  const fitted = img.resize(1400, 1400, { fit: "inside", withoutEnlargement: true });
+  if (hasAlpha) return `data:image/png;base64,${(await fitted.png().toBuffer()).toString("base64")}`;
+  const jpeg = await fitted.flatten({ background: "#ffffff" }).jpeg({ quality: 85 }).toBuffer();
   return `data:image/jpeg;base64,${jpeg.toString("base64")}`;
 }
 
@@ -47,7 +55,7 @@ function redrawPreview(host, id) {
   const img = findImage(loadState(), host, id);
   if (!img?.redraw) return null;
   try {
-    return `data:image/jpeg;base64,${fs.readFileSync(path.join(redrawDir(host), img.redraw.file)).toString("base64")}`;
+    return `data:${mimeOf(img.redraw.file)};base64,${fs.readFileSync(path.join(redrawDir(host), img.redraw.file)).toString("base64")}`;
   } catch {
     return null;
   }
@@ -56,14 +64,17 @@ function redrawPreview(host, id) {
 /**
  * Draws a new frame for one image: the recognising service writes a prompt
  * (unless the user gave one), the drawing service draws, sharp turns it into a
- * web-ready JPEG of the original's size. Keeps only the latest variant.
+ * web-ready file of the original's size. A cut-out original (no background)
+ * gets a cut-out back: drawn on white, then made transparent here; one on a
+ * plain white field gets a white field. Keeps only the latest variant.
  */
 async function redrawImage(host, id, { prompt, signal, onStep = () => {} } = {}) {
   onStep("Скачиваю кадр с сайта…");
   const { img, buf } = await original(host, id, signal);
   const draw = credsFor("draw");
   if (!draw.apiKey) throw new Error("Сначала вставьте ключ и нажмите «Сохранить».");
-  const rules = redrawRules();
+  const kind = await backgroundKind(buf).catch(() => null);
+  const rules = kind ? `${redrawRules()} ${CUTOUT_RULE}` : redrawRules();
   let text = String(prompt ?? "").trim();
   if (!text) {
     const recognize = credsFor("recognize");
@@ -80,15 +91,65 @@ async function redrawImage(host, id, { prompt, signal, onStep = () => {} } = {})
   onStep("Рисую новый кадр… обычно 20–60 секунд, медленные модели — до 5 минут");
   // The rules ride along with every prompt — also with one the user typed.
   const drawn = await drawImage(draw, `${text}\n\n${rules}`, { width: img.width, height: img.height }, { signal });
-  onStep("Сжимаю для сайта…");
-  const web = await toWebJpeg(drawn, img);
-  fs.mkdirSync(redrawDir(host), { recursive: true });
-  const file = `${id}.jpg`;
-  fs.writeFileSync(path.join(redrawDir(host), file), web.buffer);
+  let web;
+  let background = kind === "white" ? "white" : undefined;
+  let cutoutError;
+  if (kind === "transparent") {
+    onStep("Убираю фон… обычно 10–60 секунд");
+    try {
+      web = await toWebCutout(drawn, img, cutoutFormat(img.url));
+      background = "transparent";
+    } catch (e) {
+      // The frame is drawn and paid for: keep it on white rather than lose it.
+      cutoutError = `фон не убран (${e.message}) — кадр сохранён на белом фоне`;
+      background = "white";
+    }
+  }
+  if (!web) {
+    onStep("Сжимаю для сайта…");
+    web = { ...(await toWebJpeg(drawn, img)), format: "jpg" };
+  }
+  const dir = redrawDir(host);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = `${id}.${web.format}`;
+  fs.writeFileSync(path.join(dir, file), web.buffer);
+  for (const ext of ["jpg", "png", "webp"]) {
+    if (`${id}.${ext}` !== file) fs.rmSync(path.join(dir, `${id}.${ext}`), { force: true });
+  }
   const updated = updateImage(host, id, {
-    redraw: { file, prompt: text, width: web.width, height: web.height, bytes: web.bytes, at: new Date().toISOString() },
+    redraw: {
+      file,
+      prompt: text,
+      width: web.width,
+      height: web.height,
+      bytes: web.bytes,
+      at: new Date().toISOString(),
+      ...(background ? { background } : {}),
+      ...(cutoutError ? { cutoutError } : {}),
+    },
   });
   if (!updated) throw new Error("Кадр пропал из результата — сайт перепроверили, пока шла перерисовка.");
+  return updated;
+}
+
+/**
+ * "Вырезать фон" on a frame already drawn: the subject alone, transparent,
+ * same size. No drawing again and no money — the model runs on this computer.
+ */
+async function cutoutRedraw(host, id) {
+  const img = findImage(loadState(), host, id);
+  if (!img?.redraw) throw new Error("Сначала перерисуйте кадр.");
+  if (img.redraw.background === "transparent") throw new Error("Фон у этого кадра уже убран.");
+  const dir = redrawDir(host);
+  const buf = fs.readFileSync(path.join(dir, img.redraw.file));
+  const r = img.redraw;
+  const web = await toWebCutout(buf, { width: r.width, height: r.height, bytes: r.bytes }, cutoutFormat(img.url));
+  const file = `${id}.${web.format}`;
+  fs.writeFileSync(path.join(dir, file), web.buffer);
+  if (file !== r.file) fs.rmSync(path.join(dir, r.file), { force: true });
+  const { cutoutError: _gone, ...rest } = r;
+  const updated = updateImage(host, id, { redraw: { ...rest, file, bytes: web.bytes, background: "transparent" } });
+  if (!updated) throw new Error("Кадр пропал из результата — сайт перепроверили.");
   return updated;
 }
 
@@ -116,7 +177,7 @@ function exportSite(host, folder) {
     let name = baseName(img.url);
     for (let n = 2; used.has(name); n++) name = `${baseName(img.url)}-${n}`;
     used.add(name);
-    const file = `${name}.jpg`;
+    const file = `${name}${path.extname(img.redraw.file) || ".jpg"}`;
     fs.copyFileSync(path.join(redrawDir(host), img.redraw.file), path.join(dir, file));
     rows.push([displayUrl(img.page), img.url, file, img.redraw.width, img.redraw.height]);
   }
@@ -126,4 +187,4 @@ function exportSite(host, folder) {
   return { dir, count: done.length };
 }
 
-module.exports = { originalPreview, redrawPreview, redrawImage, exportOne, exportSite };
+module.exports = { originalPreview, redrawPreview, redrawImage, cutoutRedraw, exportOne, exportSite };

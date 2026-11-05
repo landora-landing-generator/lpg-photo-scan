@@ -50,6 +50,17 @@ function plural(n, one, few, many) {
   return `${n} ${word}`;
 }
 
+/** Shows a picture in a .frame; a transparent one (PNG/WebP data URL) gets a checkerboard behind it. */
+function showIn(id, src) {
+  $(id).src = src;
+  $(id).parentElement.classList.toggle("clear", /^data:image\/(?:png|webp)/.test(src));
+}
+/** "PNG без фона для сайта" / "JPEG для сайта" — what file the new frame is. */
+const fileKind = (file, background) => {
+  const ext = (String(file).split(".").pop() || "jpg").toLowerCase();
+  const type = ext === "jpg" ? "JPEG" : ext.toUpperCase();
+  return background === "transparent" ? `${type} без фона для сайта` : background === "white" ? `${type} на белом фоне для сайта` : `${type} для сайта`;
+};
 const kb = (bytes) => (bytes >= 1024 * 1024 ? `${(bytes / 1048576).toFixed(1)} МБ` : `${Math.max(1, Math.round(bytes / 1024))} КБ`);
 /** Display forms of page URLs (Cyrillic host and path), filled from the main process. */
 const shownUrl = new Map();
@@ -766,12 +777,12 @@ async function showViewerImage() {
   setStatus("viewer-status", "");
 
   // Thumbnail first, the full-size original as soon as it arrives.
-  $("viewer-old").src = img.thumb;
+  showIn("viewer-old", img.thumb);
   $("viewer-old-wait").hidden = true;
   const id = img.id;
   ipc.originalImage(viewer.host, id).then((res) => {
     if (viewer.id !== id) return;
-    if (typeof res === "string") $("viewer-old").src = res;
+    if (typeof res === "string") showIn("viewer-old", res);
   });
   await showRedrawn(img);
 }
@@ -779,9 +790,11 @@ async function showViewerImage() {
 async function showRedrawn(img) {
   const preview = img.redraw ? await ipc.redrawnImage(viewer.host, img.id) : null;
   if (preview) {
-    $("viewer-new").src = preview;
+    showIn("viewer-new", preview);
     $("viewer-new-wait").hidden = true;
-    $("viewer-new-meta").textContent = `· ${img.redraw.width}×${img.redraw.height}, ${kb(img.redraw.bytes)}, JPEG для сайта`;
+    $("viewer-new-meta").textContent =
+      `· ${img.redraw.width}×${img.redraw.height}, ${kb(img.redraw.bytes)}, ${fileKind(img.redraw.file, img.redraw.background)}` +
+      (img.redraw.cutoutError ? ` · ${img.redraw.cutoutError}` : "");
   } else {
     $("viewer-new").removeAttribute("src");
     $("viewer-new-wait").hidden = false;
@@ -790,6 +803,7 @@ async function showRedrawn(img) {
   }
   $("viewer-redraw").textContent = img.redraw ? "Перерисовать ещё раз" : "Перерисовать";
   $("viewer-save").disabled = !img.redraw;
+  $("viewer-cutout").disabled = !img.redraw || img.redraw.background === "transparent";
 }
 
 function step(delta) {
@@ -837,6 +851,7 @@ $("viewer-redraw").addEventListener("click", async () => {
   const id = img.id;
   setViewerBusy(true);
   $("viewer-save").disabled = true;
+  $("viewer-cutout").disabled = true;
   $("viewer-new-wait").hidden = false;
   clearInterval(drawClock.timer);
   drawClock.timer = null;
@@ -879,6 +894,24 @@ function renderStep() {
 
 ipc.onImageStep(({ id, step }) => {
   if (viewer.busy && viewer.id === id) showStep(step);
+});
+
+$("viewer-cutout").addEventListener("click", async () => {
+  const img = currentImage();
+  if (!img?.redraw || viewer.busy) return;
+  const id = img.id;
+  for (const b of ["viewer-cutout", "viewer-save", "viewer-redraw"]) $(b).disabled = true;
+  setStatus("viewer-status", "Убираю фон… обычно 10–60 секунд.");
+  const res = await ipc.cutoutImage(viewer.host, id);
+  $("viewer-redraw").disabled = false;
+  if (viewer.id !== id || $("viewer").hidden) return;
+  if (res.error) {
+    setStatus("viewer-status", res.error, "bad");
+    await showRedrawn(currentImage());
+    return;
+  }
+  await showRedrawn(res.image);
+  setStatus("viewer-status", "Фон убран — «Скачать на компьютер» сохранит PNG с прозрачностью.", "ok");
 });
 
 $("viewer-save").addEventListener("click", async () => {
@@ -939,6 +972,7 @@ function setStudioBusy(on) {
   $("studio-wait").hidden = !on;
   if (on) $("studio-out").removeAttribute("src");
   $("studio-save").disabled = on;
+  $("studio-cutout").disabled = on || /-cut\.png$/.test(studio.file ?? "");
   $("studio-go").textContent = on ? "Отменить" : studio.file ? "Нарисовать ещё" : "Нарисовать";
   $("studio-go").classList.toggle("primary", !on);
   $("studio-go").classList.toggle("danger", on);
@@ -955,16 +989,36 @@ $("studio-go").addEventListener("click", async () => {
   setStudioBusy(false);
   if (res.error) {
     setStatus("studio-status", res.error, res.cancelled ? "" : "bad");
-    if (studio.lastPreview) $("studio-out").src = studio.lastPreview;
+    if (studio.lastPreview) showIn("studio-out", studio.lastPreview);
     return;
   }
   studio.lastPreview = res.preview;
   studio.file = res.file;
-  $("studio-out").src = res.preview;
-  $("studio-meta").textContent = `${res.width}×${res.height}, ${kb(res.bytes)}, JPEG для сайта`;
+  showIn("studio-out", res.preview);
+  $("studio-meta").textContent = `${res.width}×${res.height}, ${kb(res.bytes)}, ${fileKind(res.file, /\.(?:png|webp)$/.test(res.file) ? "transparent" : "")}`;
   $("studio-result").hidden = false;
+  $("studio-cutout").disabled = /\.(?:png|webp)$/.test(res.file);
   $("studio-go").textContent = "Нарисовать ещё";
   setStatus("studio-status", "Готово.", "ok");
+});
+
+$("studio-cutout").addEventListener("click", async () => {
+  if (!studio.file || studio.busy) return;
+  for (const b of ["studio-cutout", "studio-save", "studio-go"]) $(b).disabled = true;
+  setStatus("studio-status", "Убираю фон… обычно 10–60 секунд.");
+  const res = await ipc.studioCutout(studio.file);
+  $("studio-save").disabled = false;
+  $("studio-go").disabled = false;
+  if (res.error) {
+    $("studio-cutout").disabled = false;
+    setStatus("studio-status", res.error, "bad");
+    return;
+  }
+  studio.file = res.file;
+  studio.lastPreview = res.preview;
+  showIn("studio-out", res.preview);
+  $("studio-meta").textContent = `${res.width}×${res.height}, ${kb(res.bytes)}, ${fileKind(res.file, "transparent")}`;
+  setStatus("studio-status", "Фон убран.", "ok");
 });
 
 $("studio-save").addEventListener("click", async () => {

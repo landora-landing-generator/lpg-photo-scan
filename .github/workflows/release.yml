@@ -38,7 +38,7 @@ jobs:
 
       - name: Self-test (macOS, native)
         if: runner.os == 'macOS'
-        timeout-minutes: 5
+        timeout-minutes: 10
         env:
           APP: ${{ matrix.app }}
         run: |
@@ -48,7 +48,7 @@ jobs:
 
       - name: Self-test (Windows)
         if: runner.os == 'Windows'
-        timeout-minutes: 5
+        timeout-minutes: 10
         shell: pwsh
         run: |
           $p = Start-Process -FilePath "dist\win-unpacked\LPG Photo Scan.exe" -ArgumentList "--selftest=selftest.json" -Wait -PassThru
@@ -57,7 +57,7 @@ jobs:
 
       - name: Install and run the real installer (Windows)
         if: runner.os == 'Windows'
-        timeout-minutes: 5
+        timeout-minutes: 10
         shell: pwsh
         run: |
           $setup = Get-ChildItem dist\*.exe | Select-Object -First 1

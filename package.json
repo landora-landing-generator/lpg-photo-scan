@@ -1,7 +1,7 @@
 {
   "name": "lpg-photo-scan",
   "productName": "LPG Photo Scan",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Проверяет список сайтов и показывает, на каких есть фотографии людей",
   "private": true,
   "main": "src/main/main.js",
@@ -9,14 +9,16 @@
     "start": "electron .",
     "scan": "electron src/main/cli.js",
     "test": "vitest run",
-    "dist:mac": "electron-builder --mac --arm64 && electron-builder --mac --x64",
-    "dist:win": "electron-builder --win",
-    "dist:mac-arm64": "electron-builder --mac --arm64",
-    "dist:mac-x64": "electron-builder --mac --x64"
+    "dist:mac": "node build/fetch-model.mjs && electron-builder --mac --arm64 && electron-builder --mac --x64",
+    "dist:win": "node build/fetch-model.mjs && electron-builder --win",
+    "dist:mac-arm64": "node build/fetch-model.mjs && electron-builder --mac --arm64",
+    "dist:mac-x64": "node build/fetch-model.mjs && electron-builder --mac --x64",
+    "model": "node build/fetch-model.mjs"
   },
   "dependencies": {
     "exceljs": "4.4.0",
     "jszip": "3.10.2",
+    "onnxruntime-node": "1.23.2",
     "sharp": "0.34.5"
   },
   "devDependencies": {
@@ -27,7 +29,8 @@
   "allowScripts": {
     "electron@45.1.0": true,
     "sharp@0.34.5": true,
-    "electron-winstaller@5.4.0": true
+    "electron-winstaller@5.4.0": true,
+    "onnxruntime-node@1.23.2": false
   },
   "updateRepo": "landora-landing-generator/lpg-photo-scan",
   "downloadPage": "https://landora-landing-generator.github.io/lpg-photo-scan/",
@@ -36,11 +39,13 @@
     "artifactName": "lpg-photo-scan-${os}-${arch}.${ext}",
     "files": [
       "src/**",
-      "package.json"
+      "package.json",
+      "!node_modules/onnxruntime-node/bin/napi-v6/linux/**"
     ],
     "asarUnpack": [
       "node_modules/sharp/**",
-      "node_modules/@img/**"
+      "node_modules/@img/**",
+      "node_modules/onnxruntime-node/**"
     ],
     "directories": {
       "buildResources": "build",
@@ -90,8 +95,17 @@
       "shortcutName": "LPG Photo Scan"
     },
     "publish": null,
-    "afterPack": "build/adhoc-sign.cjs",
-    "copyright": "© 2026 Андрей Цибин"
+    "afterPack": "build/after-pack.cjs",
+    "copyright": "© 2026 Андрей Цибин",
+    "extraResources": [
+      {
+        "from": "models",
+        "to": "models",
+        "filter": [
+          "*.onnx"
+        ]
+      }
+    ]
   },
   "author": {
     "name": "Андрей Цибин"

@@ -10,12 +10,12 @@ const { parseDomains, displayHost, displayUrl } = require("./domains");
 const { checkKey, providerList, FatalKeyError, PROVIDERS, drawModelsFor, findDrawModel, catalogDrawModels } = require("./providers");
 const { writeExcel } = require("./excel");
 const { loadSettings, saveSettings, updateDrawList, setDrawModel, loadCatalogs, saveCatalog, credsFor, loadState, saveState, findImage } = require("./store");
-const { originalPreview, redrawPreview, redrawImage, exportOne, exportSite } = require("./redraw");
+const { originalPreview, redrawPreview, redrawImage, cutoutRedraw, exportOne, exportSite } = require("./redraw");
 const { baseName } = require("./redraw-names");
 const { domainsFromFile } = require("./import");
 const { checkForUpdate } = require("./update");
 const { DEFAULT_REDRAW_RULES } = require("./prompts");
-const { loadReference, generate, exportStudio } = require("./studio");
+const { loadReference, generate, exportStudio, cutoutStudio } = require("./studio");
 
 // Developer aids: a separate data folder and a forced theme for screenshots.
 if (process.env.LPG_USER_DATA) app.setPath("userData", process.env.LPG_USER_DATA);
@@ -340,16 +340,25 @@ ipcMain.handle("image:redraw", (_e, { host, id, prompt }) =>
   }),
 );
 ipcMain.handle("image:redraw-cancel", () => jobs.viewer?.abort());
+ipcMain.handle(
+  "image:cutout",
+  guarded(async (_e, { host, id }) => {
+    const img = await cutoutRedraw(host, id);
+    send("image:updated", { host, image: img });
+    return { image: img, preview: redrawPreview(host, id) };
+  }),
+);
 
 ipcMain.handle(
   "image:save",
   guarded(async (_e, { host, id }) => {
     const img = findImage(loadState(), host, id);
     if (!img?.redraw) return { error: "Сначала перерисуйте кадр." };
+    const ext = path.extname(img.redraw.file).slice(1) || "jpg";
     const { canceled, filePath } = await dialog.showSaveDialog(win, {
       title: "Сохранить новый кадр",
-      defaultPath: path.join(app.getPath("downloads"), `${baseName(img.url)}.jpg`),
-      filters: [{ name: "JPEG", extensions: ["jpg"] }],
+      defaultPath: path.join(app.getPath("downloads"), `${baseName(img.url)}.${ext}`),
+      filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
     });
     if (canceled || !filePath) return { saved: false };
     exportOne(host, id, filePath);
@@ -459,13 +468,14 @@ ipcMain.handle(
 );
 ipcMain.handle("studio:generate", (_e, params) => cancellable("studio", (signal) => generate({ ...params, signal })));
 ipcMain.handle("studio:cancel", () => jobs.studio?.abort());
+ipcMain.handle("studio:cutout", guarded((_e, { file }) => cutoutStudio(file)));
 ipcMain.handle(
   "studio:save",
   guarded(async (_e, { file }) => {
     const { canceled, filePath } = await dialog.showSaveDialog(win, {
       title: "Сохранить кадр",
       defaultPath: path.join(app.getPath("downloads"), file),
-      filters: [{ name: "JPEG", extensions: ["jpg"] }],
+      filters: [{ name: (path.extname(file).slice(1) || "jpg").toUpperCase(), extensions: [path.extname(file).slice(1) || "jpg"] }],
     });
     if (canceled || !filePath) return { saved: false };
     exportStudio(file, filePath);
@@ -500,6 +510,9 @@ app.setAboutPanelOptions({
 
 const selftestArg = process.argv.find((a) => a.startsWith("--selftest"));
 
+// The background-removal process dies with the app, never through its own exit.
+app.on("will-quit", () => require("./cutout").stopCutout());
+
 app.whenReady().then(async () => {
   if (selftestArg) {
     // Packaged-app check for CI: prints every check, exit code 1 on any failure.
@@ -507,6 +520,7 @@ app.whenReady().then(async () => {
     for (const c of checks) console.log(`${c.ok ? "PASS" : "FAIL"}  ${c.name}  ${c.detail}`);
     const out = selftestArg.split("=")[1];
     if (out) fs.writeFileSync(out, JSON.stringify(checks, null, 2));
+    require("./cutout").stopCutout();
     app.exit(checks.every((c) => c.ok) ? 0 : 1);
     return;
   }
